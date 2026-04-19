@@ -38,8 +38,8 @@ RUN npm install -g @llamaindex/liteparse
 WORKDIR /app
 
 # Install Python deps first (leverages Docker layer cache)
-COPY req.txt ./
-RUN pip install -r req.txt
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
 
 # Copy only what the app needs
 COPY POC1/ ./POC1/
