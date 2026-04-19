@@ -1,0 +1,73 @@
+{
+  "window_index": 1,
+  "start_page": 1,
+  "end_page": 75,
+  "num_images": 75,
+  "model": "gemini-3.1-flash-lite-preview",
+  "status": "ok",
+  "total_attempts": 1,
+  "elapsed_s": 9.99,
+  "gen_elapsed_s": 9.99,
+  "usage": {
+    "input_tokens": 84166,
+    "output_tokens": 906,
+    "thinking_tokens": 0,
+    "total_tokens": 85072
+  },
+  "num_extractions": 4,
+  "attempt_log": [
+    {
+      "attempt": 1,
+      "status": "ok",
+      "elapsed_s": 9.99
+    }
+  ],
+  "response": {
+    "extracted_metrics": [
+      {
+        "metric_target": "EBITDA",
+        "forensic_reasoning_log": "STEP 1: The metric 'Profit Before Interest and Depreciation' is explicitly listed in the 'FINANCIAL HIGHLIGHTS' table on page 37. This matches the definition of EBITDA (Profit before interest, tax, depreciation, and amortization). The value for the year ended March 31, 2016 is 35,906.79.",
+        "entity_context": "Standalone",
+        "source_type": "AUDITED_TABLE",
+        "verbatim_source_text": "Profit Before Interest and Depreciation | 35,906.79 | 21,758.98 | +65.02%",
+        "surrounding_context": "FINANCIAL HIGHLIGHTS",
+        "declared_unit": "Rs. in Lakhs",
+        "current_year_value": "35906.79",
+        "page_number": 37
+      },
+      {
+        "metric_target": "EBIT Margin",
+        "forensic_reasoning_log": "STEP 1: The document explicitly states 'The operating margin for the current year was at 16.94%'. This is an explicit percentage margin for operating profit (EBIT).",
+        "entity_context": "Standalone",
+        "source_type": "NARRATIVE",
+        "verbatim_source_text": "The Profit Before Interest and Depreciation was at Rs. 35,906.79 Lakhs compared to Rs. 21,758.98 Lakhs for the previous year. The operating margin for the current year was at 16.94% compared to 11.73% for the last year.",
+        "surrounding_context": "STATE OF COMPANY'S AFFAIRS",
+        "declared_unit": "%",
+        "current_year_value": "16.94",
+        "page_number": 37
+      },
+      {
+        "metric_target": "EBITDA Margin",
+        "forensic_reasoning_log": "STEP 1: The table on page 47, 'Overall analysis of the financial statements', lists 'Profit Before Finance Costs and Depreciation' with a corresponding percentage column. The value for the year ended March 31, 2016 is 16.94%. This is the EBITDA margin.",
+        "entity_context": "Standalone",
+        "source_type": "AUDITED_TABLE",
+        "verbatim_source_text": "Profit Before Finance Costs and Depreciation | 35,906.79 | 16.94 | 21,758.98 | 11.73",
+        "surrounding_context": "Overall analysis of the financial statements:",
+        "declared_unit": "%",
+        "current_year_value": "16.94",
+        "page_number": 47
+      },
+      {
+        "metric_target": "Cash Loss Incurrence Status",
+        "forensic_reasoning_log": "STEP 1: The document states 'There were no qualifications in the Auditors' report forming part of this financials for the year ended March 31, 2016.' and there is no mention of cash losses in the Board's Report, implying no cash loss was incurred.",
+        "entity_context": "Standalone",
+        "source_type": "NARRATIVE",
+        "verbatim_source_text": "There were no qualifications in the Auditors in their report forming part of this financials for the year ended March 31, 2016.",
+        "surrounding_context": "OTHER DISCLOSURES",
+        "declared_unit": "Unstated",
+        "current_year_value": "NOT_INCURRED",
+        "page_number": 43
+      }
+    ]
+  }
+}

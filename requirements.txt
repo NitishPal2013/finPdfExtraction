@@ -1,0 +1,13 @@
+# Financial Metric Extractor — runtime dependencies only
+
+# Gemini SDK
+google-genai>=0.8.0
+
+# Structured output schemas
+pydantic>=2.6.0
+
+# Environment loading
+python-dotenv>=1.0.0
+
+# Streamlit UI
+streamlit>=1.30.0

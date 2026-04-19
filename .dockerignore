@@ -1,0 +1,29 @@
+# Keep the build context small and deterministic.
+.nair/
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Host-only artifacts — bind-mounted at runtime, not baked in.
+pdfs/
+POC1/results/
+
+# IDE / OS cruft
+.claude/
+.streamlit/
+.DS_Store
+.idea/
+.vscode/
+
+# Git metadata
+.git/
+.gitignore
+
+# Docs / scratch
+*.log
+req.txt
+README.md

@@ -1,0 +1,24 @@
+# Local dev only — runs the Streamlit UI for the POC1 pipeline.
+#
+# Bind-mounts pdfs/ and POC1/results/ so the host directly sees the input PDFs
+# (saved by the UI as pdfs/<company>/<year>.pdf) and the per-document outputs
+# (POC1/results/<company>_<year>/*.json). The Gemini API key is passed through
+# from the host .env file — do NOT bake it into the image.
+#
+# Usage:
+#   docker compose up --build
+#   open http://localhost:8501
+services:
+  app:
+    build: .
+    container_name: poc1-extractor
+    ports:
+      - "8501:8501"
+    environment:
+      # Picked up by POC1.gemini_client — set in .env next to this file.
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    volumes:
+      - ./pdfs:/app/pdfs
+      - ./POC1/results:/app/POC1/results
+    restart: unless-stopped

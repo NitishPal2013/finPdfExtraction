@@ -1,0 +1,334 @@
+{
+  "model": "gemini-3.1-flash-lite-preview",
+  "source_dir": "/Users/fti/personal_work/nair/POC1/results/acc_13",
+  "windows_processed": 4,
+  "windows_failed": 0,
+  "raw_metric_count_before_dedup": 7,
+  "unique_metric_count_after_dedup": 7,
+  "duplicates_collapsed": 0,
+  "canonical_metric_count": 5,
+  "canonical_filter_stats": {
+    "targets_total": 3,
+    "targets_with_consolidated": 0,
+    "targets_fallback_standalone": 3,
+    "targets_fallback_unclear": 0,
+    "rows_dropped_by_context_filter": 0
+  },
+  "target_coverage": {
+    "total_targets": 37,
+    "found_count": 3,
+    "missing_count": 34,
+    "missing_targets": [
+      "Adjusted Revenue",
+      "Adjusted Earnings",
+      "Normalized Earnings",
+      "Core Earnings",
+      "Recurring Earnings",
+      "Adjusted EPS",
+      "Normalized EPS",
+      "GAAP One-time Adjustment",
+      "GAAP Adjusted",
+      "EBIT",
+      "Adjusted EBIT",
+      "Adjusted EBITDA",
+      "Core Operating Profit",
+      "EBIT Margin",
+      "Base Business Margin",
+      "Adjusted ROE",
+      "Adjusted ROA",
+      "Free Cash Flow (FCF)",
+      "Funds From Operations (FFO)",
+      "Distributable Cash Flow",
+      "Net Debt",
+      "Net Surplus Cash",
+      "Constant Currency Revenue",
+      "Constant Currency Revenue Growth",
+      "Constant Currency Opex",
+      "ARPU",
+      "Collections",
+      "Pre-sales",
+      "Bookings",
+      "PPOP",
+      "Credit Cost ex one-off",
+      "EVA",
+      "Cash Earnings",
+      "Cash Loss"
+    ],
+    "coverage": {
+      "Adjusted Revenue": false,
+      "Adjusted Earnings": false,
+      "Normalized Earnings": false,
+      "Core Earnings": false,
+      "Recurring Earnings": false,
+      "Adjusted EPS": false,
+      "Normalized EPS": false,
+      "GAAP One-time Adjustment": false,
+      "GAAP Adjusted": false,
+      "EBIT": false,
+      "EBITDA": true,
+      "Adjusted EBIT": false,
+      "Adjusted EBITDA": false,
+      "Core Operating Profit": false,
+      "EBIT Margin": false,
+      "EBITDA Margin": true,
+      "Base Business Margin": false,
+      "Adjusted ROE": false,
+      "Adjusted ROA": false,
+      "Free Cash Flow (FCF)": false,
+      "Funds From Operations (FFO)": false,
+      "Distributable Cash Flow": false,
+      "Net Debt": false,
+      "Net Surplus Cash": false,
+      "Constant Currency Revenue": false,
+      "Constant Currency Revenue Growth": false,
+      "Constant Currency Opex": false,
+      "ARPU": false,
+      "Collections": false,
+      "Pre-sales": false,
+      "Bookings": false,
+      "PPOP": false,
+      "Credit Cost ex one-off": false,
+      "EVA": false,
+      "Cash Earnings": false,
+      "Cash Loss": false,
+      "Cash Loss Incurrence Status": true
+    }
+  },
+  "tokens_total": {
+    "input": 329334,
+    "output": 1377
+  },
+  "total_gen_seconds": 105.29,
+  "per_window": [
+    {
+      "file": "window_01_pages_1-75.json",
+      "status": "ok",
+      "start_page": 1,
+      "end_page": 75,
+      "num_extractions": 4
+    },
+    {
+      "file": "window_02_pages_66-140.json",
+      "status": "ok",
+      "start_page": 66,
+      "end_page": 140,
+      "num_extractions": 1
+    },
+    {
+      "file": "window_03_pages_131-205.json",
+      "status": "ok",
+      "start_page": 131,
+      "end_page": 205,
+      "num_extractions": 1
+    },
+    {
+      "file": "window_04_pages_196-253.json",
+      "status": "ok",
+      "start_page": 196,
+      "end_page": 253,
+      "num_extractions": 1
+    }
+  ],
+  "failures": [],
+  "metrics": [
+    {
+      "metric_target": "Cash Loss Incurrence Status",
+      "forensic_reasoning_log": "The auditor's report for Bulk Cement Corporation (India) Limited (a subsidiary) explicitly states in paragraph (xi) of the Annexure that the company has not incurred cash losses during the financial year covered by the audit.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "(xi) The company does not have any accumulated losses at the end of the financial year and has not incurred cash losses during the financial year covered by our audit and the immediately preceding financial year.",
+      "surrounding_context": "Annexure to the Auditors' Report",
+      "declared_unit": "Unstated",
+      "current_year_value": "NOT_INCURRED",
+      "page_number": 16,
+      "sources": [
+        "window_03_pages_131-205.json",
+        "window_02_pages_66-140.json",
+        "window_04_pages_196-253.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The metric 'Operating EBIDTA' is explicitly listed in the 'Financial Highlights' table on page 17 for the year 2013. The value is a currency amount (₹ Crore).",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Operating EBIDTA 1,629",
+      "surrounding_context": "INCOME STATEMENT",
+      "declared_unit": "₹ Crore",
+      "current_year_value": "1629",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA Margin",
+      "forensic_reasoning_log": "The metric 'Operating EBIDTA / Net sales' is explicitly listed in the 'Financial Highlights' table on page 17 for the year 2013. The value is a percentage.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Operating EBIDTA / Net sales 15%",
+      "surrounding_context": "SIGNIFICANT RATIOS",
+      "declared_unit": "%",
+      "current_year_value": "15",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The metric 'Operating EBITDA' is explicitly listed in the 'Cement Business - Performance at a Glance' table on page 25 for the year 2013. The value is a currency amount (₹ crore).",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Operating EBITDA - (₹ crore) 1,628.79",
+      "surrounding_context": "CEMENT BUSINESS – PERFORMANCE AT A GLANCE",
+      "declared_unit": "₹ crore",
+      "current_year_value": "1628.79",
+      "page_number": 25,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The metric 'Operating EBITDA' is explicitly listed in the 'Ready Mixed Concrete (RMX)' table on page 27 for the year 2013. The value is a currency amount (₹ crore).",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Operating EBITDA - (₹ crore) 19.61",
+      "surrounding_context": "READY MIXED CONCRETE (RMX)",
+      "declared_unit": "₹ crore",
+      "current_year_value": "19.61",
+      "page_number": 27,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ]
+    },
+    {
+      "metric_target": "Cash Loss Incurrence Status",
+      "forensic_reasoning_log": "The auditor's report (Annexure to the Auditor's Report, page 93) explicitly states that the company has not incurred cash losses in the current and immediately preceding financial year.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "(x) The Company has no accumulated losses at the end of the financial year and it has not incurred cash losses in the current and immediately preceding financial year.",
+      "surrounding_context": "Annexure to the Auditor's Report",
+      "declared_unit": "Unstated",
+      "current_year_value": "NOT_INCURRED",
+      "page_number": 93,
+      "sources": [
+        "window_02_pages_66-140.json"
+      ]
+    },
+    {
+      "metric_target": "Cash Loss Incurrence Status",
+      "forensic_reasoning_log": "The auditor's report for Bulk Cement Corporation (India) Limited (page 211, Annexure to the Auditors' Report, point xi) explicitly states that the company has not incurred cash losses during the financial year covered by the audit and the immediately preceding financial year.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "The company does not have any accumulated losses at the end of the financial year and has not incurred cash losses during the financial year covered by our audit and the immediately preceding financial year.",
+      "surrounding_context": "Annexure to the Auditors' Report (Referred to in paragraph 1 on Report on Other Legal and Regulatory Requirements.)",
+      "declared_unit": "Unstated",
+      "current_year_value": "NOT_INCURRED",
+      "page_number": 211,
+      "sources": [
+        "window_04_pages_196-253.json"
+      ]
+    }
+  ],
+  "canonical_metrics": [
+    {
+      "metric_target": "Cash Loss Incurrence Status",
+      "forensic_reasoning_log": "The auditor's report for Bulk Cement Corporation (India) Limited (a subsidiary) explicitly states in paragraph (xi) of the Annexure that the company has not incurred cash losses during the financial year covered by the audit.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "(xi) The company does not have any accumulated losses at the end of the financial year and has not incurred cash losses during the financial year covered by our audit and the immediately preceding financial year.",
+      "surrounding_context": "Annexure to the Auditors' Report",
+      "declared_unit": "Unstated",
+      "current_year_value": "NOT_INCURRED",
+      "page_number": 16,
+      "sources": [
+        "window_03_pages_131-205.json",
+        "window_02_pages_66-140.json",
+        "window_04_pages_196-253.json"
+      ],
+      "pages": [
+        16,
+        93,
+        211
+      ],
+      "alt_anchors": [
+        "(x) The Company has no accumulated losses at the end of the financial year and it has not incurred cash losses in the current and immediately preceding financial year.",
+        "The company does not have any accumulated losses at the end of the financial year and has not incurred cash losses during the financial year covered by our audit and the immediately preceding financial year."
+      ]
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The metric 'Operating EBITDA' is explicitly listed in the 'Cement Business - Performance at a Glance' table on page 25 for the year 2013. The value is a currency amount (₹ crore).",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Operating EBITDA - (₹ crore) 1,628.79",
+      "surrounding_context": "CEMENT BUSINESS – PERFORMANCE AT A GLANCE",
+      "declared_unit": "₹ crore",
+      "current_year_value": "1628.79",
+      "page_number": 25,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ],
+      "pages": [
+        25
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The metric 'Operating EBIDTA' is explicitly listed in the 'Financial Highlights' table on page 17 for the year 2013. The value is a currency amount (₹ Crore).",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Operating EBIDTA 1,629",
+      "surrounding_context": "INCOME STATEMENT",
+      "declared_unit": "₹ Crore",
+      "current_year_value": "1629",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ],
+      "pages": [
+        17
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The metric 'Operating EBITDA' is explicitly listed in the 'Ready Mixed Concrete (RMX)' table on page 27 for the year 2013. The value is a currency amount (₹ crore).",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Operating EBITDA - (₹ crore) 19.61",
+      "surrounding_context": "READY MIXED CONCRETE (RMX)",
+      "declared_unit": "₹ crore",
+      "current_year_value": "19.61",
+      "page_number": 27,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ],
+      "pages": [
+        27
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "EBITDA Margin",
+      "forensic_reasoning_log": "The metric 'Operating EBIDTA / Net sales' is explicitly listed in the 'Financial Highlights' table on page 17 for the year 2013. The value is a percentage.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Operating EBIDTA / Net sales 15%",
+      "surrounding_context": "SIGNIFICANT RATIOS",
+      "declared_unit": "%",
+      "current_year_value": "15",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ],
+      "pages": [
+        17
+      ],
+      "alt_anchors": []
+    }
+  ]
+}

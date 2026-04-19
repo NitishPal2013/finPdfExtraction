@@ -1,0 +1,307 @@
+{
+  "model": "gemini-3.1-flash-lite-preview",
+  "source_dir": "/Users/fti/personal_work/nair/POC1/results/3m_16",
+  "windows_processed": 3,
+  "windows_failed": 0,
+  "raw_metric_count_before_dedup": 6,
+  "unique_metric_count_after_dedup": 6,
+  "duplicates_collapsed": 0,
+  "canonical_metric_count": 5,
+  "canonical_filter_stats": {
+    "targets_total": 5,
+    "targets_with_consolidated": 0,
+    "targets_fallback_standalone": 5,
+    "targets_fallback_unclear": 0,
+    "rows_dropped_by_context_filter": 0
+  },
+  "target_coverage": {
+    "total_targets": 37,
+    "found_count": 5,
+    "missing_count": 32,
+    "missing_targets": [
+      "Adjusted Revenue",
+      "Adjusted Earnings",
+      "Normalized Earnings",
+      "Core Earnings",
+      "Recurring Earnings",
+      "Adjusted EPS",
+      "Normalized EPS",
+      "GAAP One-time Adjustment",
+      "GAAP Adjusted",
+      "Adjusted EBIT",
+      "Adjusted EBITDA",
+      "Core Operating Profit",
+      "Base Business Margin",
+      "Adjusted ROE",
+      "Adjusted ROA",
+      "Free Cash Flow (FCF)",
+      "Funds From Operations (FFO)",
+      "Distributable Cash Flow",
+      "Net Debt",
+      "Net Surplus Cash",
+      "Constant Currency Revenue",
+      "Constant Currency Revenue Growth",
+      "Constant Currency Opex",
+      "ARPU",
+      "Collections",
+      "Pre-sales",
+      "Bookings",
+      "PPOP",
+      "Credit Cost ex one-off",
+      "EVA",
+      "Cash Earnings",
+      "Cash Loss"
+    ],
+    "coverage": {
+      "Adjusted Revenue": false,
+      "Adjusted Earnings": false,
+      "Normalized Earnings": false,
+      "Core Earnings": false,
+      "Recurring Earnings": false,
+      "Adjusted EPS": false,
+      "Normalized EPS": false,
+      "GAAP One-time Adjustment": false,
+      "GAAP Adjusted": false,
+      "EBIT": true,
+      "EBITDA": true,
+      "Adjusted EBIT": false,
+      "Adjusted EBITDA": false,
+      "Core Operating Profit": false,
+      "EBIT Margin": true,
+      "EBITDA Margin": true,
+      "Base Business Margin": false,
+      "Adjusted ROE": false,
+      "Adjusted ROA": false,
+      "Free Cash Flow (FCF)": false,
+      "Funds From Operations (FFO)": false,
+      "Distributable Cash Flow": false,
+      "Net Debt": false,
+      "Net Surplus Cash": false,
+      "Constant Currency Revenue": false,
+      "Constant Currency Revenue Growth": false,
+      "Constant Currency Opex": false,
+      "ARPU": false,
+      "Collections": false,
+      "Pre-sales": false,
+      "Bookings": false,
+      "PPOP": false,
+      "Credit Cost ex one-off": false,
+      "EVA": false,
+      "Cash Earnings": false,
+      "Cash Loss": false,
+      "Cash Loss Incurrence Status": true
+    }
+  },
+  "tokens_total": {
+    "input": 187599,
+    "output": 1373
+  },
+  "total_gen_seconds": 65.3,
+  "per_window": [
+    {
+      "file": "window_01_pages_1-75.json",
+      "status": "ok",
+      "start_page": 1,
+      "end_page": 75,
+      "num_extractions": 4
+    },
+    {
+      "file": "window_02_pages_66-140.json",
+      "status": "ok",
+      "start_page": 66,
+      "end_page": 140,
+      "num_extractions": 1
+    },
+    {
+      "file": "window_03_pages_131-144.json",
+      "status": "ok",
+      "start_page": 131,
+      "end_page": 144,
+      "num_extractions": 1
+    }
+  ],
+  "failures": [],
+  "metrics": [
+    {
+      "metric_target": "EBIT Margin",
+      "forensic_reasoning_log": "STEP 1: The document explicitly states 'The operating margin for the current year was at 16.94%'. This is an explicit percentage margin for operating profit (EBIT).",
+      "entity_context": "Standalone",
+      "source_type": "NARRATIVE",
+      "verbatim_source_text": "The Profit Before Interest and Depreciation was at Rs. 35,906.79 Lakhs compared to Rs. 21,758.98 Lakhs for the previous year. The operating margin for the current year was at 16.94% compared to 11.73% for the last year.",
+      "surrounding_context": "STATE OF COMPANY'S AFFAIRS",
+      "declared_unit": "%",
+      "current_year_value": "16.94",
+      "page_number": 37,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "STEP 1: The metric 'Profit Before Interest and Depreciation' is explicitly listed in the 'FINANCIAL HIGHLIGHTS' table on page 37. This matches the definition of EBITDA (Profit before interest, tax, depreciation, and amortization). The value for the year ended March 31, 2016 is 35,906.79.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Profit Before Interest and Depreciation | 35,906.79 | 21,758.98 | +65.02%",
+      "surrounding_context": "FINANCIAL HIGHLIGHTS",
+      "declared_unit": "Rs. in Lakhs",
+      "current_year_value": "35906.79",
+      "page_number": 37,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ]
+    },
+    {
+      "metric_target": "Cash Loss Incurrence Status",
+      "forensic_reasoning_log": "STEP 1: The document states 'There were no qualifications in the Auditors' report forming part of this financials for the year ended March 31, 2016.' and there is no mention of cash losses in the Board's Report, implying no cash loss was incurred.",
+      "entity_context": "Standalone",
+      "source_type": "NARRATIVE",
+      "verbatim_source_text": "There were no qualifications in the Auditors in their report forming part of this financials for the year ended March 31, 2016.",
+      "surrounding_context": "OTHER DISCLOSURES",
+      "declared_unit": "Unstated",
+      "current_year_value": "NOT_INCURRED",
+      "page_number": 43,
+      "sources": [
+        "window_01_pages_1-75.json",
+        "window_02_pages_66-140.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA Margin",
+      "forensic_reasoning_log": "STEP 1: The table on page 47, 'Overall analysis of the financial statements', lists 'Profit Before Finance Costs and Depreciation' with a corresponding percentage column. The value for the year ended March 31, 2016 is 16.94%. This is the EBITDA margin.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Profit Before Finance Costs and Depreciation | 35,906.79 | 16.94 | 21,758.98 | 11.73",
+      "surrounding_context": "Overall analysis of the financial statements:",
+      "declared_unit": "%",
+      "current_year_value": "16.94",
+      "page_number": 47,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ]
+    },
+    {
+      "metric_target": "Cash Loss Incurrence Status",
+      "forensic_reasoning_log": "STEP 1: The auditor's report (Annexure B to Independent Auditors' Report) explicitly states that the company has not incurred any cash losses in the financial year ended March 31, 2016, and in the immediately preceding financial year. This satisfies the semantic principle for the Cash Loss Incurrence Status metric.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "The Company has not incurred any cash losses in the financial year ended March 31, 2016 and in the immediately preceding financial year.",
+      "surrounding_context": "ANNEXURE 'B' TO INDEPENDENT AUDITORS' REPORT",
+      "declared_unit": "Unstated",
+      "current_year_value": "NOT_INCURRED",
+      "page_number": 103,
+      "sources": [
+        "window_02_pages_66-140.json"
+      ]
+    },
+    {
+      "metric_target": "EBIT",
+      "forensic_reasoning_log": "The table 'Segment results (Profit Before Interest and Tax)' explicitly lists 'Total segment results' as 29,296.27 for March 31, 2016. This matches the definition of EBIT (Profit before interest and tax) and is a currency value.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Total segment results 29,296.27 15,350.65",
+      "surrounding_context": "Segment results (Profit Before Interest and Tax)",
+      "declared_unit": "Rs. Lakhs",
+      "current_year_value": "29296.27",
+      "page_number": 130,
+      "sources": [
+        "window_03_pages_131-144.json"
+      ]
+    }
+  ],
+  "canonical_metrics": [
+    {
+      "metric_target": "Cash Loss Incurrence Status",
+      "forensic_reasoning_log": "STEP 1: The document states 'There were no qualifications in the Auditors' report forming part of this financials for the year ended March 31, 2016.' and there is no mention of cash losses in the Board's Report, implying no cash loss was incurred.",
+      "entity_context": "Standalone",
+      "source_type": "NARRATIVE",
+      "verbatim_source_text": "There were no qualifications in the Auditors in their report forming part of this financials for the year ended March 31, 2016.",
+      "surrounding_context": "OTHER DISCLOSURES",
+      "declared_unit": "Unstated",
+      "current_year_value": "NOT_INCURRED",
+      "page_number": 43,
+      "sources": [
+        "window_01_pages_1-75.json",
+        "window_02_pages_66-140.json"
+      ],
+      "pages": [
+        43,
+        103
+      ],
+      "alt_anchors": [
+        "The Company has not incurred any cash losses in the financial year ended March 31, 2016 and in the immediately preceding financial year."
+      ]
+    },
+    {
+      "metric_target": "EBIT",
+      "forensic_reasoning_log": "The table 'Segment results (Profit Before Interest and Tax)' explicitly lists 'Total segment results' as 29,296.27 for March 31, 2016. This matches the definition of EBIT (Profit before interest and tax) and is a currency value.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Total segment results 29,296.27 15,350.65",
+      "surrounding_context": "Segment results (Profit Before Interest and Tax)",
+      "declared_unit": "Rs. Lakhs",
+      "current_year_value": "29296.27",
+      "page_number": 130,
+      "sources": [
+        "window_03_pages_131-144.json"
+      ],
+      "pages": [
+        130
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "EBIT Margin",
+      "forensic_reasoning_log": "STEP 1: The document explicitly states 'The operating margin for the current year was at 16.94%'. This is an explicit percentage margin for operating profit (EBIT).",
+      "entity_context": "Standalone",
+      "source_type": "NARRATIVE",
+      "verbatim_source_text": "The Profit Before Interest and Depreciation was at Rs. 35,906.79 Lakhs compared to Rs. 21,758.98 Lakhs for the previous year. The operating margin for the current year was at 16.94% compared to 11.73% for the last year.",
+      "surrounding_context": "STATE OF COMPANY'S AFFAIRS",
+      "declared_unit": "%",
+      "current_year_value": "16.94",
+      "page_number": 37,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ],
+      "pages": [
+        37
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "STEP 1: The metric 'Profit Before Interest and Depreciation' is explicitly listed in the 'FINANCIAL HIGHLIGHTS' table on page 37. This matches the definition of EBITDA (Profit before interest, tax, depreciation, and amortization). The value for the year ended March 31, 2016 is 35,906.79.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Profit Before Interest and Depreciation | 35,906.79 | 21,758.98 | +65.02%",
+      "surrounding_context": "FINANCIAL HIGHLIGHTS",
+      "declared_unit": "Rs. in Lakhs",
+      "current_year_value": "35906.79",
+      "page_number": 37,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ],
+      "pages": [
+        37
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "EBITDA Margin",
+      "forensic_reasoning_log": "STEP 1: The table on page 47, 'Overall analysis of the financial statements', lists 'Profit Before Finance Costs and Depreciation' with a corresponding percentage column. The value for the year ended March 31, 2016 is 16.94%. This is the EBITDA margin.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Profit Before Finance Costs and Depreciation | 35,906.79 | 16.94 | 21,758.98 | 11.73",
+      "surrounding_context": "Overall analysis of the financial statements:",
+      "declared_unit": "%",
+      "current_year_value": "16.94",
+      "page_number": 47,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ],
+      "pages": [
+        47
+      ],
+      "alt_anchors": []
+    }
+  ]
+}

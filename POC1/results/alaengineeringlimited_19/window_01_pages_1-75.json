@@ -1,0 +1,62 @@
+{
+  "window_index": 1,
+  "start_page": 1,
+  "end_page": 75,
+  "num_images": 75,
+  "model": "gemini-3.1-flash-lite-preview",
+  "status": "ok",
+  "total_attempts": 1,
+  "elapsed_s": 26.15,
+  "gen_elapsed_s": 26.15,
+  "usage": {
+    "input_tokens": 86268,
+    "output_tokens": 684,
+    "thinking_tokens": 0,
+    "total_tokens": 86952
+  },
+  "num_extractions": 3,
+  "attempt_log": [
+    {
+      "attempt": 1,
+      "status": "ok",
+      "elapsed_s": 26.15
+    }
+  ],
+  "response": {
+    "extracted_metrics": [
+      {
+        "metric_target": "EBITDA",
+        "forensic_reasoning_log": "The value is explicitly stated as 'EBITDA in 2018-19' in the infographic on page 17. The value is a currency amount (₹ 7,807.93 million).",
+        "entity_context": "Consolidated",
+        "source_type": "NARRATIVE",
+        "verbatim_source_text": "₹ 7,807.93 million EBITDA in 2018-19",
+        "surrounding_context": "You don't have to be great to start, BUT YOU MUST start to be great",
+        "declared_unit": "million",
+        "current_year_value": "7807.93",
+        "page_number": 17
+      },
+      {
+        "metric_target": "EBITDA",
+        "forensic_reasoning_log": "The value is explicitly stated in the 'FINANCIAL HIGHLIGHTS' table on page 17 under the 'Consolidated' column for 'Year ended 31 March 2019'. The label 'Profit before Finance Cost, Depreciation & Amortization and Tax Expenses' is the statutory definition of EBITDA.",
+        "entity_context": "Consolidated",
+        "source_type": "AUDITED_TABLE",
+        "verbatim_source_text": "Profit before Finance Cost, Depreciation & Amortization and Tax Expenses 78,079.29",
+        "surrounding_context": "1. FINANCIAL HIGHLIGHTS",
+        "declared_unit": "₹ in Lakhs",
+        "current_year_value": "78079.29",
+        "page_number": 17
+      },
+      {
+        "metric_target": "EBIT",
+        "forensic_reasoning_log": "The value is explicitly stated in the 'FINANCIAL HIGHLIGHTS' table on page 17 under the 'Consolidated' column for 'Year ended 31 March 2019'. The label 'Profit before Tax' is not EBIT, but the table provides 'Profit before Finance Cost, Depreciation & Amortization and Tax Expenses' (EBITDA) and 'Depreciation & Amortization'. However, the metric 'EBIT' is not explicitly labeled as such in the table. Therefore, I will not derive it.",
+        "entity_context": "Consolidated",
+        "source_type": "AUDITED_TABLE",
+        "verbatim_source_text": "Profit before Finance Cost, Depreciation & Amortization and Tax Expenses 78,079.29",
+        "surrounding_context": "1. FINANCIAL HIGHLIGHTS",
+        "declared_unit": "₹ in Lakhs",
+        "current_year_value": "78079.29",
+        "page_number": 17
+      }
+    ]
+  }
+}

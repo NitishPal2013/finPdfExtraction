@@ -1,0 +1,374 @@
+{
+  "model": "gemini-3.1-flash-lite-preview",
+  "source_dir": "/Users/fti/personal_work/nair/POC1/results/alaengineeringlimited_19",
+  "windows_processed": 4,
+  "windows_failed": 0,
+  "raw_metric_count_before_dedup": 9,
+  "unique_metric_count_after_dedup": 9,
+  "duplicates_collapsed": 0,
+  "canonical_metric_count": 6,
+  "canonical_filter_stats": {
+    "targets_total": 5,
+    "targets_with_consolidated": 5,
+    "targets_fallback_standalone": 0,
+    "targets_fallback_unclear": 0,
+    "rows_dropped_by_context_filter": 2
+  },
+  "target_coverage": {
+    "total_targets": 37,
+    "found_count": 5,
+    "missing_count": 32,
+    "missing_targets": [
+      "Adjusted Revenue",
+      "Adjusted Earnings",
+      "Normalized Earnings",
+      "Core Earnings",
+      "Recurring Earnings",
+      "Adjusted EPS",
+      "Normalized EPS",
+      "GAAP One-time Adjustment",
+      "GAAP Adjusted",
+      "Adjusted EBIT",
+      "Adjusted EBITDA",
+      "Core Operating Profit",
+      "EBIT Margin",
+      "Base Business Margin",
+      "Adjusted ROE",
+      "Adjusted ROA",
+      "Free Cash Flow (FCF)",
+      "Funds From Operations (FFO)",
+      "Distributable Cash Flow",
+      "Net Surplus Cash",
+      "Constant Currency Revenue",
+      "Constant Currency Revenue Growth",
+      "Constant Currency Opex",
+      "ARPU",
+      "Collections",
+      "Pre-sales",
+      "Bookings",
+      "PPOP",
+      "Credit Cost ex one-off",
+      "EVA",
+      "Cash Earnings",
+      "Cash Loss"
+    ],
+    "coverage": {
+      "Adjusted Revenue": false,
+      "Adjusted Earnings": false,
+      "Normalized Earnings": false,
+      "Core Earnings": false,
+      "Recurring Earnings": false,
+      "Adjusted EPS": false,
+      "Normalized EPS": false,
+      "GAAP One-time Adjustment": false,
+      "GAAP Adjusted": false,
+      "EBIT": true,
+      "EBITDA": true,
+      "Adjusted EBIT": false,
+      "Adjusted EBITDA": false,
+      "Core Operating Profit": false,
+      "EBIT Margin": false,
+      "EBITDA Margin": true,
+      "Base Business Margin": false,
+      "Adjusted ROE": false,
+      "Adjusted ROA": false,
+      "Free Cash Flow (FCF)": false,
+      "Funds From Operations (FFO)": false,
+      "Distributable Cash Flow": false,
+      "Net Debt": true,
+      "Net Surplus Cash": false,
+      "Constant Currency Revenue": false,
+      "Constant Currency Revenue Growth": false,
+      "Constant Currency Opex": false,
+      "ARPU": false,
+      "Collections": false,
+      "Pre-sales": false,
+      "Bookings": false,
+      "PPOP": false,
+      "Credit Cost ex one-off": false,
+      "EVA": false,
+      "Cash Earnings": false,
+      "Cash Loss": false,
+      "Cash Loss Incurrence Status": true
+    }
+  },
+  "tokens_total": {
+    "input": 322148,
+    "output": 2008
+  },
+  "total_gen_seconds": 108.23,
+  "per_window": [
+    {
+      "file": "window_01_pages_1-75.json",
+      "status": "ok",
+      "start_page": 1,
+      "end_page": 75,
+      "num_extractions": 3
+    },
+    {
+      "file": "window_02_pages_66-140.json",
+      "status": "ok",
+      "start_page": 66,
+      "end_page": 140,
+      "num_extractions": 4
+    },
+    {
+      "file": "window_03_pages_131-205.json",
+      "status": "ok",
+      "start_page": 131,
+      "end_page": 205,
+      "num_extractions": 1
+    },
+    {
+      "file": "window_04_pages_196-249.json",
+      "status": "ok",
+      "start_page": 196,
+      "end_page": 249,
+      "num_extractions": 1
+    }
+  ],
+  "failures": [],
+  "metrics": [
+    {
+      "metric_target": "EBIT",
+      "forensic_reasoning_log": "The value is explicitly stated in the 'FINANCIAL HIGHLIGHTS' table on page 17 under the 'Consolidated' column for 'Year ended 31 March 2019'. The label 'Profit before Tax' is not EBIT, but the table provides 'Profit before Finance Cost, Depreciation & Amortization and Tax Expenses' (EBITDA) and 'Depreciation & Amortization'. However, the metric 'EBIT' is not explicitly labeled as such in the table. Therefore, I will not derive it.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Profit before Finance Cost, Depreciation & Amortization and Tax Expenses 78,079.29",
+      "surrounding_context": "1. FINANCIAL HIGHLIGHTS",
+      "declared_unit": "₹ in Lakhs",
+      "current_year_value": "78079.29",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The value is explicitly stated as 'EBITDA in 2018-19' in the infographic on page 17. The value is a currency amount (₹ 7,807.93 million).",
+      "entity_context": "Consolidated",
+      "source_type": "NARRATIVE",
+      "verbatim_source_text": "₹ 7,807.93 million EBITDA in 2018-19",
+      "surrounding_context": "You don't have to be great to start, BUT YOU MUST start to be great",
+      "declared_unit": "million",
+      "current_year_value": "7807.93",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The value is explicitly stated in the 'FINANCIAL HIGHLIGHTS' table on page 17 under the 'Consolidated' column for 'Year ended 31 March 2019'. The label 'Profit before Finance Cost, Depreciation & Amortization and Tax Expenses' is the statutory definition of EBITDA.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Profit before Finance Cost, Depreciation & Amortization and Tax Expenses 78,079.29",
+      "surrounding_context": "1. FINANCIAL HIGHLIGHTS",
+      "declared_unit": "₹ in Lakhs",
+      "current_year_value": "78079.29",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json",
+        "window_02_pages_66-140.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "STEP 1: The table 'Key Performance Indicators' on page 88 provides 'EBIDTA' for the consolidated performance. The value for FY 2018-19 is 78,079.29. This is a currency amount, not a percentage.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "EBIDTA 78,079.29 65,751.45",
+      "surrounding_context": "Key Performance Indicators: An analysis of the key indicators as percentage to Revenue is given below:",
+      "declared_unit": "₹ in Lakhs",
+      "current_year_value": "78079.29",
+      "page_number": 88,
+      "sources": [
+        "window_02_pages_66-140.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA Margin",
+      "forensic_reasoning_log": "STEP 1: The table 'Key Performance Indicators' on page 88 provides '% of revenue from operations' for 'EBIDTA'. The value for FY 2018-19 is 25.44%. This is the EBITDA Margin.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "- % of revenue from operations 25.44% 26.66%",
+      "surrounding_context": "Key Performance Indicators: An analysis of the key indicators as percentage to Revenue is given below:",
+      "declared_unit": "%",
+      "current_year_value": "25.44%",
+      "page_number": 88,
+      "sources": [
+        "window_02_pages_66-140.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "STEP 1: The table 'Key performance indicators' on page 89 provides 'EBIDTA' for the standalone performance. The value for F.Y. 2018-19 is 68,680.05. This is a currency amount.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "EBIDTA 68,680.05 68,235.68",
+      "surrounding_context": "Key performance indicators: An analysis of the key indicators as percentage to Revenue is given below:",
+      "declared_unit": "₹ in Lakhs",
+      "current_year_value": "68680.05",
+      "page_number": 89,
+      "sources": [
+        "window_02_pages_66-140.json"
+      ]
+    },
+    {
+      "metric_target": "EBITDA Margin",
+      "forensic_reasoning_log": "STEP 1: The table 'Key performance indicators' on page 89 provides '% of revenue from operations' for 'EBIDTA'. The value for F.Y. 2018-19 is 24.20%. This is the EBITDA Margin.",
+      "entity_context": "Standalone",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "- % of revenue from operations 24.20% 31.51%",
+      "surrounding_context": "Key performance indicators: An analysis of the key indicators as percentage to Revenue is given below:",
+      "declared_unit": "%",
+      "current_year_value": "24.20%",
+      "page_number": 89,
+      "sources": [
+        "window_02_pages_66-140.json"
+      ]
+    },
+    {
+      "metric_target": "Cash Loss Incurrence Status",
+      "forensic_reasoning_log": "The auditor's report for the consolidated financial statements explicitly states that the Group did not have any material foreseeable losses on long-term contracts, including derivative contracts, during the year ended 31 March 2019. This confirms no cash loss was incurred.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "The Group did not have any material foreseeable losses on long-term contracts, including derivative contracts, during the year ended 31 March 2019",
+      "surrounding_context": "Report on Other Legal and Regulatory Requirements",
+      "declared_unit": "Unstated",
+      "current_year_value": "NOT_INCURRED",
+      "page_number": 159,
+      "sources": [
+        "window_03_pages_131-205.json"
+      ]
+    },
+    {
+      "metric_target": "Net Debt",
+      "forensic_reasoning_log": "The document explicitly provides a 'Debt to total equity' table in Note 45(B). The 'Debt' row is defined as 'non-current borrowings (including current maturity of long-term debts) and current borrowings'. The value for FY19 (31 March 2019) is 12,811.18 Lakhs.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Debt * 12,811.18 12,329.91",
+      "surrounding_context": "The group monitors capital on the basis of the following debt equity ratio:",
+      "declared_unit": "₹ in Lakhs",
+      "current_year_value": "12811.18",
+      "page_number": 216,
+      "sources": [
+        "window_04_pages_196-249.json"
+      ]
+    }
+  ],
+  "canonical_metrics": [
+    {
+      "metric_target": "Cash Loss Incurrence Status",
+      "forensic_reasoning_log": "The auditor's report for the consolidated financial statements explicitly states that the Group did not have any material foreseeable losses on long-term contracts, including derivative contracts, during the year ended 31 March 2019. This confirms no cash loss was incurred.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "The Group did not have any material foreseeable losses on long-term contracts, including derivative contracts, during the year ended 31 March 2019",
+      "surrounding_context": "Report on Other Legal and Regulatory Requirements",
+      "declared_unit": "Unstated",
+      "current_year_value": "NOT_INCURRED",
+      "page_number": 159,
+      "sources": [
+        "window_03_pages_131-205.json"
+      ],
+      "pages": [
+        159
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "EBIT",
+      "forensic_reasoning_log": "The value is explicitly stated in the 'FINANCIAL HIGHLIGHTS' table on page 17 under the 'Consolidated' column for 'Year ended 31 March 2019'. The label 'Profit before Tax' is not EBIT, but the table provides 'Profit before Finance Cost, Depreciation & Amortization and Tax Expenses' (EBITDA) and 'Depreciation & Amortization'. However, the metric 'EBIT' is not explicitly labeled as such in the table. Therefore, I will not derive it.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Profit before Finance Cost, Depreciation & Amortization and Tax Expenses 78,079.29",
+      "surrounding_context": "1. FINANCIAL HIGHLIGHTS",
+      "declared_unit": "₹ in Lakhs",
+      "current_year_value": "78079.29",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ],
+      "pages": [
+        17
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The value is explicitly stated as 'EBITDA in 2018-19' in the infographic on page 17. The value is a currency amount (₹ 7,807.93 million).",
+      "entity_context": "Consolidated",
+      "source_type": "NARRATIVE",
+      "verbatim_source_text": "₹ 7,807.93 million EBITDA in 2018-19",
+      "surrounding_context": "You don't have to be great to start, BUT YOU MUST start to be great",
+      "declared_unit": "million",
+      "current_year_value": "7807.93",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json"
+      ],
+      "pages": [
+        17
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "EBITDA",
+      "forensic_reasoning_log": "The value is explicitly stated in the 'FINANCIAL HIGHLIGHTS' table on page 17 under the 'Consolidated' column for 'Year ended 31 March 2019'. The label 'Profit before Finance Cost, Depreciation & Amortization and Tax Expenses' is the statutory definition of EBITDA.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Profit before Finance Cost, Depreciation & Amortization and Tax Expenses 78,079.29",
+      "surrounding_context": "1. FINANCIAL HIGHLIGHTS",
+      "declared_unit": "₹ in Lakhs",
+      "current_year_value": "78079.29",
+      "page_number": 17,
+      "sources": [
+        "window_01_pages_1-75.json",
+        "window_02_pages_66-140.json"
+      ],
+      "pages": [
+        17,
+        88
+      ],
+      "alt_anchors": [
+        "EBIDTA 78,079.29 65,751.45"
+      ]
+    },
+    {
+      "metric_target": "EBITDA Margin",
+      "forensic_reasoning_log": "STEP 1: The table 'Key Performance Indicators' on page 88 provides '% of revenue from operations' for 'EBIDTA'. The value for FY 2018-19 is 25.44%. This is the EBITDA Margin.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "- % of revenue from operations 25.44% 26.66%",
+      "surrounding_context": "Key Performance Indicators: An analysis of the key indicators as percentage to Revenue is given below:",
+      "declared_unit": "%",
+      "current_year_value": "25.44%",
+      "page_number": 88,
+      "sources": [
+        "window_02_pages_66-140.json"
+      ],
+      "pages": [
+        88
+      ],
+      "alt_anchors": []
+    },
+    {
+      "metric_target": "Net Debt",
+      "forensic_reasoning_log": "The document explicitly provides a 'Debt to total equity' table in Note 45(B). The 'Debt' row is defined as 'non-current borrowings (including current maturity of long-term debts) and current borrowings'. The value for FY19 (31 March 2019) is 12,811.18 Lakhs.",
+      "entity_context": "Consolidated",
+      "source_type": "AUDITED_TABLE",
+      "verbatim_source_text": "Debt * 12,811.18 12,329.91",
+      "surrounding_context": "The group monitors capital on the basis of the following debt equity ratio:",
+      "declared_unit": "₹ in Lakhs",
+      "current_year_value": "12811.18",
+      "page_number": 216,
+      "sources": [
+        "window_04_pages_196-249.json"
+      ],
+      "pages": [
+        216
+      ],
+      "alt_anchors": []
+    }
+  ]
+}
