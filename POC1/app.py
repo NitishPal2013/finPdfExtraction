@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -31,11 +32,101 @@ from POC1.paths import derive_paths, ensure_images  # noqa: E402
 from POC1.run import NonRetryableWindowFailure, run as run_extraction  # noqa: E402
 
 PDFS_ROOT = PROJECT_ROOT / "pdfs"
+RESULTS_ROOT = PROJECT_ROOT / "POC1" / "results"
 
 
 def slugify(name: str) -> str:
     """Company name → directory-safe slug: lowercase alnum, separators stripped."""
     return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def _path_size(p: Path | None) -> int:
+    if p is None or not p.exists():
+        return 0
+    if p.is_file():
+        return p.stat().st_size
+    return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+
+
+def _human_size(n: int) -> str:
+    size = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _discover_documents() -> list[dict]:
+    """Union scan of pdfs/ and POC1/results/ keyed by (slug, year_stem)."""
+    docs: dict[tuple[str, str], dict] = {}
+
+    def _entry(slug: str, stem: str) -> dict:
+        key = (slug, stem)
+        if key not in docs:
+            docs[key] = {
+                "slug": slug,
+                "year": stem,
+                "pdf_path": None,
+                "images_dir": None,
+                "results_dir": None,
+            }
+        return docs[key]
+
+    if PDFS_ROOT.exists():
+        for company_dir in PDFS_ROOT.iterdir():
+            if not company_dir.is_dir():
+                continue
+            slug = company_dir.name
+            for pdf in company_dir.glob("*.pdf"):
+                _entry(slug, pdf.stem)["pdf_path"] = pdf
+            for sub in company_dir.iterdir():
+                if sub.is_dir() and sub.name.endswith("_pages"):
+                    _entry(slug, sub.name[: -len("_pages")])["images_dir"] = sub
+
+    if RESULTS_ROOT.exists():
+        for r in RESULTS_ROOT.iterdir():
+            if not r.is_dir() or "_" not in r.name:
+                continue
+            slug, stem = r.name.rsplit("_", 1)
+            _entry(slug, stem)["results_dir"] = r
+
+    out = []
+    for d in docs.values():
+        d["pdf_size"] = _path_size(d["pdf_path"])
+        d["images_size"] = _path_size(d["images_dir"])
+        d["results_size"] = _path_size(d["results_dir"])
+        d["display"] = d["slug"].replace("_", " ").replace("-", " ").title() or d["slug"]
+        out.append(d)
+    return sorted(out, key=lambda x: (x["slug"], x["year"]))
+
+
+def _remove_path(p: Path | None) -> None:
+    if p is None or not p.exists():
+        return
+    if p.is_file():
+        p.unlink()
+    else:
+        shutil.rmtree(p)
+
+
+def _wipe_directory_contents(root: Path) -> None:
+    if not root.exists():
+        return
+    for child in root.iterdir():
+        _remove_path(child)
+
+
+def _wipe_all_storage() -> None:
+    """Button callback — safe to mutate widget-bound session_state here.
+
+    Streamlit disallows mutating session_state keys tied to widgets after the
+    widget has been instantiated in the same script run. on_click callbacks
+    fire between runs, so this is the correct place to reset the confirm box.
+    """
+    _wipe_directory_contents(PDFS_ROOT)
+    _wipe_directory_contents(RESULTS_ROOT)
+    st.session_state["wipe_all_confirm"] = False
 
 
 def derive_year_from_filename(filename: str) -> str | None:
@@ -71,6 +162,72 @@ with st.sidebar:
         help="Year is derived from the digits in the filename.",
     )
     submit = st.button("Run extraction", type="primary", use_container_width=True)
+
+    with st.expander("Manage storage", expanded=False):
+        docs = _discover_documents()
+        total_bytes = sum(
+            d["pdf_size"] + d["images_size"] + d["results_size"] for d in docs
+        )
+        st.caption(
+            f"{len(docs)} document(s) on disk  ·  {_human_size(total_bytes)} total"
+        )
+
+        if not docs:
+            st.caption("No stored documents yet.")
+        else:
+            for d in docs:
+                total = d["pdf_size"] + d["images_size"] + d["results_size"]
+                st.markdown(
+                    f"**{d['display']}** — `{d['year']}`  ·  {_human_size(total)}"
+                )
+                st.caption(
+                    f"PDF {_human_size(d['pdf_size'])}  ·  "
+                    f"Screenshots {_human_size(d['images_size'])}  ·  "
+                    f"Results {_human_size(d['results_size'])}"
+                )
+                col_r, col_d = st.columns(2)
+                clear_key = f"clear_res_{d['slug']}_{d['year']}"
+                delete_key = f"del_doc_{d['slug']}_{d['year']}"
+                if col_r.button(
+                    "Clear results",
+                    key=clear_key,
+                    disabled=d["results_size"] == 0,
+                    use_container_width=True,
+                    help="Deletes extraction output only. PDF + screenshots stay so the "
+                         "next run re-invokes Gemini on the same pages.",
+                ):
+                    _remove_path(d["results_dir"])
+                    st.rerun()
+                if col_d.button(
+                    "Delete document",
+                    key=delete_key,
+                    use_container_width=True,
+                    help="Removes PDF, screenshots, and results for this document.",
+                ):
+                    _remove_path(d["pdf_path"])
+                    _remove_path(d["images_dir"])
+                    _remove_path(d["results_dir"])
+                    # Clean up now-empty company directory
+                    if d["pdf_path"] is not None:
+                        parent = d["pdf_path"].parent
+                        if parent.exists() and parent.is_dir() and not any(parent.iterdir()):
+                            parent.rmdir()
+                    st.rerun()
+                st.divider()
+
+        st.markdown("---")
+        st.caption(
+            "Danger zone: wipes every stored PDF, screenshot, and result directory."
+        )
+        confirm_wipe = st.checkbox(
+            "I understand — wipe all storage", key="wipe_all_confirm"
+        )
+        st.button(
+            "Clear ALL storage",
+            disabled=not confirm_wipe,
+            use_container_width=True,
+            on_click=_wipe_all_storage,
+        )
 
 if not submit:
     st.info("Enter a company name, upload a PDF, and press **Run extraction**.")
