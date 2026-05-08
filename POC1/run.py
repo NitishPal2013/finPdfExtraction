@@ -30,13 +30,39 @@ import httpx
 from google.genai import errors as gerrors
 from google.genai import types
 
-from .file_utils import delete_files, upload_files
-from .gemini_client import make_async_client
-from .models import Prompt15Response
-from .paths import DocPaths, add_common_args, derive_paths, ensure_images
-from .prompt import prompt_template
+from pydantic import ValidationError
 
-MODEL = "gemini-3.1-flash-lite-preview"
+# Ensure POC1's parent directory is on sys.path BEFORE we do absolute POC1.*
+# imports below. This makes the module importable both as `POC1.run`
+# (package-style, via app.py) and as a top-level `run` module (which is what
+# happens if Streamlit's auto-loader picks it up from POC1/ directly on
+# sys.path — in that case relative imports `from .file_utils …` fail with
+# "attempted relative import with no known parent package").
+import sys as _sys
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_PROJECT_ROOT))
+
+from POC1.file_utils import delete_files, upload_files
+from POC1.gemini_client import make_async_client
+from POC1.models import ExtractedMetric, Prompt15Response
+from POC1.paths import DocPaths, add_common_args, derive_paths, ensure_images
+from POC1.prompt import prompt_template
+
+MODEL = "gemini-3.1-flash-lite-preview"  # default; overridable per-run via run(model=...)
+
+# Display name → Gemini API model ID. Surfaced by the Streamlit UI as a picker.
+# If a particular ID is unrecognized by the API, the user will see a clear 4xx
+# from the SDK and can switch in one click.
+MODEL_OPTIONS: dict[str, str] = {
+    "Gemini 2.5 Flash":        "gemini-2.5-flash",
+    "Gemini 2.5 Flash-Lite":   "gemini-2.5-flash-lite",
+    "Gemini 3 Flash-Lite":     "gemini-3-flash-lite-preview",
+    "Gemini 3.1 Flash-Lite":   "gemini-3.1-flash-lite-preview",
+    "Gemini 3.1 Flash":        "gemini-3.1-flash-preview",
+}
+DEFAULT_MODEL_LABEL = "Gemini 3.1 Flash-Lite"
+
 WINDOW_SIZE = 75
 OVERLAP = 10
 STEP = WINDOW_SIZE - OVERLAP  # 65
@@ -113,7 +139,7 @@ def _build_request(
     parts.append(types.Part.from_text(
         text=(
             f"This chunk covers document pages {start} through {end} "
-            f"(inclusive). Use these absolute page numbers in the `page_number` field."
+            f"(inclusive). Use these absolute page numbers in the `page_number` field. DO FOLLOW THE INSTRUCTIONS EXACTLY, and ONLY RETURN WHAT THE INSTRUCTIONS ASK FOR. "
         )
     ))
     config = types.GenerateContentConfig(
@@ -149,6 +175,33 @@ def _parse_and_validate(response) -> tuple[dict, dict]:
             f"got top-level type={type(parsed).__name__}, "
             f"keys={list(parsed.keys()) if isinstance(parsed, dict) else 'n/a'}"
         )
+    # Per-row Pydantic validation. We never fail the whole window for one bad row
+    # — that would burn a retry on a deterministic error and cost real money.
+    # Bad rows are logged into `_dropped` for audit; good rows are replaced with
+    # their normalized model_dump() so downstream merge sees a consistent shape.
+    raw_rows = parsed["extracted_metrics"]
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    for row in raw_rows:
+        try:
+            validated = ExtractedMetric.model_validate(row)
+        except ValidationError as ve:
+            dropped.append({
+                "row": row,
+                "errors": [
+                    {
+                        "loc": list(err.get("loc", ())),
+                        "msg": err.get("msg", ""),
+                        "type": err.get("type", ""),
+                    }
+                    for err in ve.errors()
+                ],
+            })
+            continue
+        kept.append(validated.model_dump())
+    parsed["extracted_metrics"] = kept
+    if dropped:
+        parsed["_dropped"] = dropped
     meta = getattr(response, "usage_metadata", None)
     usage = {
         "input_tokens": getattr(meta, "prompt_token_count", 0) or 0,
@@ -174,6 +227,7 @@ async def call_window(
     system_instruction: str,
     *,
     client,
+    model: str = MODEL,
 ) -> dict:
     """Call Gemini for one window. Retries forever on transient errors;
     aborts the whole run on non-retryable errors. Always writes a JSON record.
@@ -193,9 +247,9 @@ async def call_window(
         attempt += 1
         attempt_t0 = time.time()
         try:
-            print(f"[{label}] attempt {attempt} — pages {start}-{end} ({n} imgs)")
+            print(f"[{label}] attempt {attempt} — pages {start}-{end} ({n} imgs) — model={model}")
             response = await client.models.generate_content(
-                model=MODEL,
+                model=model,
                 contents=parts,
                 config=config,
             )
@@ -217,7 +271,7 @@ async def call_window(
                 rec = {
                     "window_index": idx,
                     "start_page": start, "end_page": end,
-                    "num_images": n, "model": MODEL,
+                    "num_images": n, "model": model,
                     "status": "error",
                     "error": err_msg[:500],
                     "error_type": err_type,
@@ -266,7 +320,9 @@ async def call_window(
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump(rec, f, indent=2, ensure_ascii=False, default=str)
         retry_note = f" (after {attempt - 1} retries)" if attempt > 1 else ""
-        print(f"[{label}] OK — {num} metrics in {elapsed:.1f}s{retry_note} | "
+        n_dropped = len(parsed.get("_dropped", []))
+        drop_note = f", dropped={n_dropped}" if n_dropped else ""
+        print(f"[{label}] OK — {num} metrics{drop_note} in {elapsed:.1f}s{retry_note} | "
               f"in={usage['input_tokens']} out={usage['output_tokens']} → {out_path.name}")
         return rec
 
@@ -285,7 +341,7 @@ def _load_completed_window(path: Path) -> dict | None:
     return None
 
 
-async def run(doc: DocPaths) -> None:
+async def run(doc: DocPaths, *, model: str = MODEL) -> None:
     image_dir, total_pages = ensure_images(doc.pdf_path, doc.image_dir)
     doc.output_dir.mkdir(parents=True, exist_ok=True)
     windows = build_windows(total_pages, WINDOW_SIZE, STEP)
@@ -310,7 +366,7 @@ async def run(doc: DocPaths) -> None:
             pending.append((i, s, e))
 
     print("=" * 70)
-    print(f"SIMPLE — {MODEL}")
+    print(f"SIMPLE — {model}")
     print(f"PDF:        {doc.pdf_path}")
     print(f"Company:    {doc.company_display}   |   FY:  {doc.fy_year}")
     print(f"Images:     {image_dir}  ({total_pages} pages)")
@@ -351,7 +407,7 @@ async def run(doc: DocPaths) -> None:
             for i, s, e in pending:
                 processed[i] = await call_window(
                     i, s, e, uploaded_map, image_dir, doc.output_dir,
-                    system_instruction, client=client,
+                    system_instruction, client=client, model=model,
                 )
         finally:
             # Delete uploads only on full success of all pending windows.
@@ -380,7 +436,7 @@ async def run(doc: DocPaths) -> None:
 
     total_attempts = sum(r.get("total_attempts", 1) for r in results)
     summary = {
-        "model": MODEL,
+        "model": model,
         "pdf_path": str(doc.pdf_path),
         "company": doc.company_display,
         "fy_year": doc.fy_year,
@@ -458,5 +514,11 @@ def main() -> None:
     asyncio.run(run(doc))
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and len(_sys.argv) >= 2:
+    # Defensive: only run the CLI when the user actually invoked
+    # `python POC1/run.py <pdf>` or `python -m POC1.run <pdf>`. Some hosts
+    # (notably Streamlit's hot-reloader with fastReruns) may re-execute
+    # imported modules in a way that sets __name__ = "__main__" without
+    # CLI args set up — in which case argparse.parse_args() would call
+    # sys.exit(2) and corrupt the calling process.
     main()

@@ -14,10 +14,18 @@ running multiple operations in the same loop can share one client.
 from __future__ import annotations
 
 import asyncio
+import sys as _sys
+from pathlib import Path as _Path
 
 from google.genai import types
 
-from .gemini_client import make_async_client
+# See run.py for rationale — keep absolute POC1.* imports robust against the
+# module being loaded outside its package context.
+_PROJECT_ROOT = _Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_PROJECT_ROOT))
+
+from POC1.gemini_client import make_async_client
 
 _MAX_CONCURRENT_UPLOADS = 20
 _UPLOAD_RETRIES = 3

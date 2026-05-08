@@ -20,8 +20,16 @@ import re
 from pathlib import Path
 from typing import get_args
 
-from .models import MetricTarget
-from .paths import add_common_args, derive_paths
+# Ensure POC1's parent is on sys.path so absolute POC1.* imports below
+# resolve regardless of whether this module was loaded as `POC1.merge`
+# (package-style) or as top-level `merge` (e.g. via Streamlit's POC1-on-path).
+import sys as _sys
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_PROJECT_ROOT))
+
+from POC1.models import MetricTarget
+from POC1.paths import add_common_args, derive_paths
 
 # Authoritative list of metric_targets from the prompt15 schema. The coverage
 # map below iterates in this order so the output has a stable, predictable
@@ -54,6 +62,116 @@ def dedup_key(m: dict) -> tuple:
 # Preference order for entity_context. Consolidated wins; if a metric_target
 # has no Consolidated rows we fall back to Standalone; Unclear is last resort.
 ENTITY_PRIORITY = ["Consolidated", "Standalone", "Unclear"]
+
+
+# ---------------------------------------------------------------------------
+# Cross-row sanity filters. Applied AFTER per-window Pydantic validation but
+# BEFORE entity-context selection — these catch anomalies only visible across
+# rows from the same window or across windows.
+# ---------------------------------------------------------------------------
+
+# Words/phrases that mark a metric label as belonging to a business segment,
+# product line, or geography. Entity-level extraction must skip these — the
+# pipeline targets company-level metrics. Class F sector-specific targets
+# (ARPU, Collections, Pre-sales, Bookings, PPOP, Credit Cost ex one-off, EVA)
+# are exempted because they're often segment-flavoured by nature.
+SEGMENT_EXEMPT_TARGETS: frozenset[str] = frozenset({
+    "ARPU", "Collections", "Pre-sales", "Bookings",
+    "PPOP", "Credit Cost ex one-off", "EVA",
+})
+
+SEGMENT_INDICATORS: tuple[str, ...] = (
+    "food delivery",
+    "hyperpure",
+    "cement business",
+    " rmx ",
+    "ready mixed concrete",
+    "india operations",
+    "international operations",
+    "domestic operations",
+    "segment result",
+    "segment revenue",
+    "segment ebitda",
+    "by segment",
+)
+
+
+def _is_segment_qualified(m: dict) -> bool:
+    target = (m.get("metric_target") or "").strip()
+    if target in SEGMENT_EXEMPT_TARGETS:
+        return False
+    haystack = " ".join((
+        m.get("verbatim_source_text") or "",
+        m.get("surrounding_context") or "",
+        m.get("literal_label_quote") or "",
+    )).lower()
+    return any(ind in haystack for ind in SEGMENT_INDICATORS)
+
+
+def _is_null_value(m: dict) -> bool:
+    """Defense-in-depth — Pydantic should already have caught these."""
+    target = (m.get("metric_target") or "").strip()
+    val = (m.get("current_year_value") or "")
+    if target == "Cash Loss Incurrence Status":
+        return val != "NOT_INCURRED"
+    return normalize_value(val) in ("", "none", "n/a", "na", "null", "—", "-", "nil")
+
+
+def _ebit_ebitda_twin_keys(metrics: list[dict]) -> set[tuple]:
+    """Build the set of EBITDA (verbatim, page) and (normalized_value, unit, page)
+    tuples. Any EBIT row matching one of these is a same-source duplication."""
+    keys: set[tuple] = set()
+    for m in metrics:
+        if (m.get("metric_target") or "").strip() != "EBITDA":
+            continue
+        page = m.get("page_number")
+        verbatim = (m.get("verbatim_source_text") or "").strip().lower()
+        unit = (m.get("declared_unit") or "").strip().lower()
+        nval = normalize_value(m.get("current_year_value"))
+        if verbatim:
+            keys.add(("verbatim", verbatim, page))
+        if nval:
+            keys.add(("value", nval, unit, page))
+    return keys
+
+
+def _is_ebit_twin_of_ebitda(m: dict, twin_keys: set[tuple]) -> bool:
+    if (m.get("metric_target") or "").strip() != "EBIT":
+        return False
+    page = m.get("page_number")
+    verbatim = (m.get("verbatim_source_text") or "").strip().lower()
+    unit = (m.get("declared_unit") or "").strip().lower()
+    nval = normalize_value(m.get("current_year_value"))
+    if verbatim and ("verbatim", verbatim, page) in twin_keys:
+        return True
+    if nval and ("value", nval, unit, page) in twin_keys:
+        return True
+    return False
+
+
+def apply_cross_row_filters(metrics: list[dict]) -> tuple[list[dict], dict]:
+    """Apply null / segment / EBIT-EBITDA-twin filters. Returns (kept, stats)."""
+    twin_keys = _ebit_ebitda_twin_keys(metrics)
+    kept: list[dict] = []
+    stats = {
+        "rows_input": len(metrics),
+        "dropped_null_value": 0,
+        "dropped_segment_qualified": 0,
+        "dropped_ebit_twin": 0,
+    }
+    for m in metrics:
+        if _is_null_value(m):
+            stats["dropped_null_value"] += 1
+            continue
+        if _is_segment_qualified(m):
+            stats["dropped_segment_qualified"] += 1
+            continue
+        if _is_ebit_twin_of_ebitda(m, twin_keys):
+            stats["dropped_ebit_twin"] += 1
+            continue
+        kept.append(m)
+    stats["rows_kept"] = len(kept)
+    return kept, stats
 
 
 def filter_to_canonical(metrics: list[dict]) -> tuple[list[dict], dict]:
@@ -191,7 +309,8 @@ def merge_for_doc(results_dir: Path, out_path: Path) -> dict:
         key=lambda m: (m.get("page_number") or 0, str(m.get("metric_target", "")), str(m.get("current_year_value", ""))),
     )
 
-    canonical, canonical_stats = filter_to_canonical(merged_list)
+    filtered_list, filter_stats = apply_cross_row_filters(merged_list)
+    canonical, canonical_stats = filter_to_canonical(filtered_list)
     coverage = compute_coverage(canonical)
 
     result = {
@@ -202,6 +321,8 @@ def merge_for_doc(results_dir: Path, out_path: Path) -> dict:
         "raw_metric_count_before_dedup": raw_total,
         "unique_metric_count_after_dedup": len(merged_list),
         "duplicates_collapsed": raw_total - len(merged_list),
+        "cross_row_filter_stats": filter_stats,
+        "rows_after_cross_row_filters": len(filtered_list),
         "canonical_metric_count": len(canonical),
         "canonical_filter_stats": canonical_stats,
         "target_coverage": coverage,
@@ -224,6 +345,11 @@ def merge_for_doc(results_dir: Path, out_path: Path) -> dict:
     print(f"  Raw metrics:            {result['raw_metric_count_before_dedup']}")
     print(f"  Unique after dedup:     {result['unique_metric_count_after_dedup']}")
     print(f"  Duplicates collapsed:   {result['duplicates_collapsed']}")
+    print(f"  Cross-row filters:      "
+          f"null={filter_stats['dropped_null_value']} "
+          f"segment={filter_stats['dropped_segment_qualified']} "
+          f"ebit-twin={filter_stats['dropped_ebit_twin']} "
+          f"→ kept={filter_stats['rows_kept']}")
     print(f"  Canonical (Consol/SA):  {result['canonical_metric_count']}")
     print(f"    targets total:          {canonical_stats['targets_total']}")
     print(f"    → Consolidated kept:    {canonical_stats['targets_with_consolidated']}")
@@ -252,5 +378,6 @@ def main() -> None:
     merge_for_doc(doc.output_dir, doc.merged_path)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and len(_sys.argv) >= 2:
+    # Defensive — see the equivalent guard in POC1/run.py for rationale.
     main()

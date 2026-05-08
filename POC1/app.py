@@ -29,7 +29,12 @@ import streamlit as st  # noqa: E402
 
 from POC1.merge import merge_for_doc  # noqa: E402
 from POC1.paths import derive_paths, ensure_images  # noqa: E402
-from POC1.run import NonRetryableWindowFailure, run as run_extraction  # noqa: E402
+from POC1.run import (  # noqa: E402
+    DEFAULT_MODEL_LABEL,
+    MODEL_OPTIONS,
+    NonRetryableWindowFailure,
+    run as run_extraction,
+)
 
 PDFS_ROOT = PROJECT_ROOT / "pdfs"
 RESULTS_ROOT = PROJECT_ROOT / "POC1" / "results"
@@ -117,6 +122,105 @@ def _wipe_directory_contents(root: Path) -> None:
         _remove_path(child)
 
 
+# ---------------------------------------------------------------------------
+# Live log tailing for the long-running asyncio.run(...) call.
+#
+# The pipeline emits per-window progress via plain `print()` (so the same
+# logs show up in `docker logs`). When invoked from Streamlit we want the
+# user to see those lines live in the browser — but `asyncio.run()` blocks
+# the main Streamlit thread, so a naive in-line approach renders nothing
+# until completion.
+#
+# Trick: run the asyncio.run() on a worker thread, redirect its stdout +
+# stderr to a queue via a tee, and let the main thread drain that queue
+# inside the `with st.status(...)` block. The main thread's brief sleeps
+# between drains let Streamlit flush partial renders to the browser.
+# ---------------------------------------------------------------------------
+import contextlib as _contextlib  # noqa: E402
+import queue as _queue  # noqa: E402
+import threading as _threading  # noqa: E402
+import time as _time  # noqa: E402
+
+
+class _LineTee:
+    """File-like object that fans `write()` calls to:
+      (a) the original stream (so docker logs / the terminal still see them), and
+      (b) a queue, line-by-line, for the Streamlit thread to drain.
+    """
+    def __init__(self, original, q: "_queue.Queue[str | None]") -> None:
+        self._original = original
+        self._q = q
+        self._buf = ""
+
+    def write(self, s: str) -> int:
+        try:
+            self._original.write(s)
+            self._original.flush()
+        except Exception:  # noqa: BLE001
+            pass
+        self._buf += s
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            self._q.put(line)
+        return len(s)
+
+    def flush(self) -> None:
+        try:
+            self._original.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def run_extraction_with_live_logs(doc, *, model: str, status, log_box):
+    """Run the async pipeline on a background thread; tail its stdout into the
+    Streamlit `log_box` placeholder. Returns the captured log lines on success;
+    re-raises whatever the worker thread caught."""
+    q: "_queue.Queue[str | None]" = _queue.Queue()
+    captured: list[str] = []
+    err_box: list[BaseException] = []
+
+    def _worker():
+        original_stdout, original_stderr = sys.stdout, sys.stderr
+        try:
+            sys.stdout = _LineTee(original_stdout, q)
+            sys.stderr = _LineTee(original_stderr, q)
+            asyncio.run(run_extraction(doc, model=model))
+        except BaseException as e:  # noqa: BLE001
+            err_box.append(e)
+        finally:
+            sys.stdout, sys.stderr = original_stdout, original_stderr
+            q.put(None)  # sentinel
+
+    t = _threading.Thread(target=_worker, daemon=True)
+    t.start()
+
+    # Drain loop: pull lines from the queue, append, redraw the tail in the UI.
+    # `log_box.code(...)` rerenders the whole code block each call — we keep
+    # only the last 60 lines on screen to avoid runaway DOM cost on long runs.
+    LIVE_TAIL_LINES = 60
+    while True:
+        try:
+            line = q.get(timeout=0.4)
+        except _queue.Empty:
+            if not t.is_alive():
+                break
+            continue
+        if line is None:
+            break
+        captured.append(line)
+        log_box.code(
+            "\n".join(captured[-LIVE_TAIL_LINES:]),
+            language="text",
+        )
+        # Tiny yield so Streamlit can flush a partial render.
+        _time.sleep(0.01)
+
+    t.join(timeout=2.0)
+    if err_box:
+        raise err_box[0]
+    return captured
+
+
 def _wipe_all_storage() -> None:
     """Button callback — safe to mutate widget-bound session_state here.
 
@@ -161,6 +265,16 @@ with st.sidebar:
         type=["pdf"],
         help="Year is derived from the digits in the filename.",
     )
+    model_labels = list(MODEL_OPTIONS.keys())
+    model_label = st.selectbox(
+        "Gemini model",
+        model_labels,
+        index=model_labels.index(DEFAULT_MODEL_LABEL),
+        help="If you hit RESOURCE_EXHAUSTED (quota) on one model, try another. "
+             "Each Gemini model line has a separate quota bucket.",
+    )
+    selected_model = MODEL_OPTIONS[model_label]
+    st.caption(f"`{selected_model}`")
     submit = st.button("Run extraction", type="primary", use_container_width=True)
 
     with st.expander("Manage storage", expanded=False):
@@ -265,6 +379,7 @@ st.write(f"**Saved PDF:** `{doc.pdf_path.relative_to(PROJECT_ROOT)}`")
 
 try:
     with st.status("Running pipeline…", expanded=True) as status:
+        status.write(f"Model: `{selected_model}`")
         status.write("Rasterizing PDF with `lit screenshot`…")
         image_dir, n_pages = ensure_images(doc.pdf_path, doc.image_dir)
         status.write(f"→ {n_pages} pages available at `{image_dir.relative_to(PROJECT_ROOT)}`")
@@ -274,10 +389,13 @@ try:
             "Each window retries indefinitely on transient errors; the run "
             "resumes from completed windows on restart."
         )
-        # Each click spins up a fresh asyncio loop. POC1.run.run() builds a new
-        # Gemini client + semaphores inside that loop, so multiple back-to-back
-        # runs in the same Streamlit process are safe.
-        asyncio.run(run_extraction(doc))
+        status.write("**Live pipeline log** (last 60 lines):")
+        log_box = status.empty()
+        # Each click spins up a fresh asyncio loop on a worker thread so that
+        # the main Streamlit thread can keep tailing stdout into log_box.
+        captured_logs = run_extraction_with_live_logs(
+            doc, model=selected_model, status=status, log_box=log_box,
+        )
 
         status.write("Merging + canonicalizing results…")
         result = merge_for_doc(doc.output_dir, doc.merged_path)
@@ -323,6 +441,54 @@ c2.metric(
     f"{coverage['found_count']} / {coverage['total_targets']}",
 )
 c3.metric("Windows processed", result["windows_processed"])
+
+import json as _json  # local import to avoid bloating top-of-module
+download_basename = f"{doc.company_slug}_{doc.year_stem}"
+full_payload = _json.dumps(result, indent=2, ensure_ascii=False).encode("utf-8")
+canonical_payload = _json.dumps(
+    {
+        "company": doc.company_display,
+        "fy_year": doc.fy_year,
+        "canonical_metrics": canonical,
+        "target_coverage": coverage,
+    },
+    indent=2,
+    ensure_ascii=False,
+).encode("utf-8")
+
+dl1, dl2, dl3 = st.columns(3)
+dl1.download_button(
+    "Download full merged.json",
+    data=full_payload,
+    file_name=f"{download_basename}_merged.json",
+    mime="application/json",
+    use_container_width=True,
+    help="Full pipeline output — raw rows, dedup stats, cross-row filter stats, "
+         "canonical metrics, and target coverage.",
+)
+dl2.download_button(
+    "Download canonical metrics only",
+    data=canonical_payload,
+    file_name=f"{download_basename}_canonical.json",
+    mime="application/json",
+    use_container_width=True,
+    help="Just the final per-target rows + coverage summary.",
+)
+dl3.download_button(
+    "Download pipeline logs",
+    data=("\n".join(captured_logs)).encode("utf-8") if captured_logs else b"(no logs)",
+    file_name=f"{download_basename}_pipeline.log",
+    mime="text/plain",
+    use_container_width=True,
+    help="Full stdout/stderr from the extraction run — exactly what you'd "
+         "see in `docker logs poc1-extractor`.",
+)
+
+with st.expander("Full pipeline logs (this run)", expanded=False):
+    if captured_logs:
+        st.code("\n".join(captured_logs), language="text")
+    else:
+        st.caption("No log lines captured.")
 
 if not canonical:
     st.warning("No metrics were extracted. Check the prompt, the PDF, or the window logs.")
