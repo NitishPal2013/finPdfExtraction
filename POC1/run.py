@@ -1,5 +1,5 @@
 """
-Simple SDK call: gemini-3.1-flash-lite-preview, 75 pages per window.
+Simple SDK call: gemini-3.1-flash-lite, 75 pages per window.
 
 No retries, no split fallback, no parallelism. Just the plain Gemini SDK:
 upload images → generate_content → save JSON. One file per window.
@@ -49,7 +49,7 @@ from POC1.models import ExtractedMetric, Prompt15Response
 from POC1.paths import DocPaths, add_common_args, derive_paths, ensure_images
 from POC1.prompt import prompt_template
 
-MODEL = "gemini-3.1-flash-lite-preview"  # default; overridable per-run via run(model=...)
+MODEL = "gemini-3.1-flash-lite"  # default; overridable per-run via run(model=...)
 
 # Display name → Gemini API model ID. Surfaced by the Streamlit UI as a picker.
 # If a particular ID is unrecognized by the API, the user will see a clear 4xx
@@ -57,9 +57,9 @@ MODEL = "gemini-3.1-flash-lite-preview"  # default; overridable per-run via run(
 MODEL_OPTIONS: dict[str, str] = {
     "Gemini 2.5 Flash":        "gemini-2.5-flash",
     "Gemini 2.5 Flash-Lite":   "gemini-2.5-flash-lite",
-    "Gemini 3 Flash-Lite":     "gemini-3-flash-lite-preview",
-    "Gemini 3.1 Flash-Lite":   "gemini-3.1-flash-lite-preview",
-    "Gemini 3.1 Flash":        "gemini-3.1-flash-preview",
+    "Gemini 3 Flash-Lite":     "gemini-3-flash-lite",
+    "Gemini 3.1 Flash-Lite":   "gemini-3.1-flash-lite",
+    "Gemini 3.1 Flash":        "gemini-3.1-flash",
 }
 DEFAULT_MODEL_LABEL = "Gemini 3.1 Flash-Lite"
 

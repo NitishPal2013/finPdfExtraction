@@ -36,6 +36,9 @@ wheels/
 
 pdfs/*
 
+# Local result dumps (POC1/POC2 ad-hoc JSON exports)
+observation_jsons/
+
 # OS
 .DS_Store
 Thumbs.db

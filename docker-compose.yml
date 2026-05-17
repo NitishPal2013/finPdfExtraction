@@ -1,9 +1,12 @@
-# Local dev only — runs the Streamlit UI for the POC1 pipeline.
+# Local dev / deployment — Streamlit UI for the POC2 pipeline.
 #
-# Bind-mounts pdfs/ and POC1/results/ so the host directly sees the input PDFs
-# (saved by the UI as pdfs/<company>/<year>.pdf) and the per-document outputs
-# (POC1/results/<company>_<year>/*.json). The Gemini API key is passed through
-# from the host .env file — do NOT bake it into the image.
+# POC2 persists nothing between runs: the PDF lives in a container tempfile
+# for the duration of one extraction, the Gemini cache + uploaded file are
+# torn down in the `finally` block of run_extraction. No volume mounts
+# required — leave the host filesystem untouched.
+#
+# The Gemini API key is passed through from the host .env file — do NOT
+# bake it into the image.
 #
 # Usage:
 #   docker compose up --build
@@ -11,14 +14,11 @@
 services:
   app:
     build: .
-    container_name: poc1-extractor
+    container_name: poc2-extractor
     ports:
       - "8501:8501"
     environment:
-      # Picked up by POC1.gemini_client — set in .env next to this file.
+      # Picked up by POC2.gemini_client — set in .env next to this file.
       - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-    volumes:
-      - ./pdfs:/app/pdfs
-      - ./POC1/results:/app/POC1/results
     restart: unless-stopped

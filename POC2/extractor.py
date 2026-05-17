@@ -1,0 +1,618 @@
+"""
+POC2 extractor: per-metric extraction against a cached PDF.
+
+Lifecycle (single run):
+  1. Upload the user's PDF to the Gemini Files API.
+  2. Create explicit cached content: system instruction + the uploaded PDF.
+  3. For each of the 37 metrics, dispatch a targeted prompt with
+     `cached_content=cache.name`. Concurrent with bounded semaphore.
+  4. (Optional) Verification layer — for each found row, ask the model
+     "is this the most adjusted figure on the page?" against the same cache.
+  5. Tear down the cache and uploaded file in `finally` — POC2 does NOT
+     persist artifacts to disk under the project tree.
+
+Retry policy mirrors POC1.run: infinite retries on transient errors
+(network, 5xx, 429, parse glitches), abort immediately on non-retryable
+errors (auth, 4xx other than 429, code bugs).
+
+Progress is emitted via `print()` so the Streamlit live-log tail in app.py
+keeps working without further wiring.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import random
+import sys as _sys
+import time
+import traceback
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Awaitable, Callable
+
+import httpx
+from google.genai import errors as gerrors
+from google.genai import types
+from pydantic import ValidationError
+
+# Robust path bootstrap — see POC1.run for the same idiom. Lets us import
+# `POC2.*` whether we were started as a package, a module, or Streamlit's
+# auto-loader.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(_PROJECT_ROOT) not in _sys.path:
+    _sys.path.insert(0, str(_PROJECT_ROOT))
+
+from POC2.gemini_client import make_async_client, make_sync_client
+from POC2.metrics import METRIC_METADATA, MetricDef
+from POC2.models import Prompt2Response, VerificationResponse
+from POC2.paths import DocPaths2
+from POC2.prompt import (
+    build_metric_prompt,
+    build_system_instruction,
+    build_verification_prompt,
+)
+
+
+# Default model. Streamlit UI offers a picker; CLI uses this fallback.
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
+
+# Same display-name → API-id mapping POC1 exposes. Caching is supported on
+# Gemini 2.5+ flash/pro lines; flash-lite caching exists on later iterations.
+# Users may need to swap models if a specific id rejects `cached_content`.
+MODEL_OPTIONS: dict[str, str] = {
+    "Gemini 3.1 Flash-Lite":   "gemini-3.1-flash-lite",
+    "Gemini 3.1 Flash":        "gemini-3.1-flash",
+    "Gemini 3 Flash-Lite":     "gemini-3-flash-lite",
+    "Gemini 2.5 Flash":        "gemini-2.5-flash",
+    "Gemini 2.5 Flash-Lite":   "gemini-2.5-flash-lite",
+}
+DEFAULT_MODEL_LABEL = "Gemini 3.1 Flash-Lite"
+
+
+# Retry policy — mirrors POC1.run.
+BASE_DELAY = 2.0
+MAX_DELAY = 60.0
+
+RETRYABLE_NETWORK_ERRORS: tuple[type[BaseException], ...] = (
+    gerrors.ServerError,
+    httpx.RemoteProtocolError,
+    httpx.ReadTimeout,
+    httpx.WriteTimeout,
+    httpx.ConnectTimeout,
+    httpx.PoolTimeout,
+    httpx.NetworkError,
+    asyncio.TimeoutError,
+    ConnectionError,
+)
+
+
+class _ResponseValidationError(Exception):
+    """Raised when the model returned data we can't parse or trust."""
+
+
+class NonRetryablePOC2Failure(SystemExit):
+    """Raised on errors we won't keep retrying (auth, bad request, etc.).
+    Aborts the whole run so the UI can show a clear actionable message."""
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, _ResponseValidationError):
+        return True
+    if isinstance(exc, RETRYABLE_NETWORK_ERRORS):
+        return True
+    if isinstance(exc, gerrors.ClientError):
+        status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+        return status == 429
+    return False
+
+
+def _backoff_seconds(attempt: int) -> float:
+    base = min(MAX_DELAY, BASE_DELAY * (2 ** (attempt - 1)))
+    return base * (0.8 + 0.4 * random.random())
+
+
+# ---------------------------------------------------------------------------
+# Files API readiness gate
+# ---------------------------------------------------------------------------
+
+def _wait_for_active(sync_client, file_obj, *, timeout: float = 120.0,
+                     interval: float = 1.5):
+    """Poll the Files API until the uploaded file reaches ACTIVE state.
+
+    Required before `caches.create()` — Gemini rejects cache creation against
+    a file still in PROCESSING. The user's prototype skipped this poll and
+    got away with it because the PDFs were small; we add it for robustness
+    on larger annual reports (200+ pages can sit in PROCESSING for a few
+    seconds).
+    """
+    deadline = time.time() + timeout
+    last_state = None
+    while time.time() < deadline:
+        refreshed = sync_client.files.get(name=file_obj.name)
+        state = getattr(refreshed, "state", None)
+        state_str = state.name if hasattr(state, "name") else str(state)
+        last_state = state_str
+        if state_str.endswith("ACTIVE"):
+            return refreshed
+        if state_str.endswith("FAILED"):
+            raise RuntimeError(
+                f"Files API reported state={state_str} for {file_obj.name}"
+            )
+        time.sleep(interval)
+    raise TimeoutError(
+        f"File {file_obj.name} did not reach ACTIVE within {timeout}s "
+        f"(last state: {last_state})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Consolidated > Standalone document-level filter
+# ---------------------------------------------------------------------------
+
+def apply_consolidated_filter(rows: list[dict]) -> tuple[list[dict], dict]:
+    """Document-level rule (user-defined):
+       If ANY extracted row has entity_context == 'Consolidated', drop every
+       row whose entity_context is not 'Consolidated'. Otherwise leave the
+       set untouched.
+
+    Rationale: when an Indian annual report publishes consolidated statements,
+    standalone numbers describe just the parent entity (excluding subsidiaries)
+    and the consolidated set is the company-level truth. Mixing both in the
+    output muddles the entity scope.
+
+    Returns (filtered_rows, stats_dict).
+    """
+    has_consolidated = any(
+        (r.get("entity_context") or "").strip() == "Consolidated" for r in rows
+    )
+    if not has_consolidated:
+        return list(rows), {
+            "consolidated_present": False,
+            "rows_in": len(rows),
+            "rows_out": len(rows),
+            "dropped_non_consolidated": 0,
+        }
+    kept = [r for r in rows
+            if (r.get("entity_context") or "").strip() == "Consolidated"]
+    return kept, {
+        "consolidated_present": True,
+        "rows_in": len(rows),
+        "rows_out": len(kept),
+        "dropped_non_consolidated": len(rows) - len(kept),
+    }
+
+
+@dataclass
+class ExtractionResult:
+    """In-memory result bundle returned to the UI."""
+    company_display: str
+    fy_year: str
+    model: str
+    extractions: list[dict] = field(default_factory=list)
+    verified: list[dict] = field(default_factory=list)  # populated if verify=True
+    coverage: dict[str, bool] = field(default_factory=dict)
+    per_metric_log: list[dict] = field(default_factory=list)
+    totals: dict[str, Any] = field(default_factory=dict)
+    # Raw rows BEFORE the Consolidated > Standalone document-level filter.
+    # Kept for transparency / audit — UI can show the dropped count.
+    extractions_raw: list[dict] = field(default_factory=list)
+    consolidated_filter_stats: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def found_count(self) -> int:
+        return sum(1 for v in self.coverage.values() if v)
+
+    @property
+    def missing_count(self) -> int:
+        return sum(1 for v in self.coverage.values() if not v)
+
+
+# ---------------------------------------------------------------------------
+# Parsing helpers
+# ---------------------------------------------------------------------------
+
+def _parse_response(response) -> tuple[list[dict], dict]:
+    """Return (extracted_rows, usage). Raises _ResponseValidationError on bad output."""
+    raw = getattr(response, "text", None) if response is not None else None
+    if not raw:
+        raise _ResponseValidationError("model returned an empty response body")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as je:
+        preview = raw[:300].replace("\n", " ")
+        raise _ResponseValidationError(
+            f"response was not valid JSON ({je}); preview: {preview!r}"
+        ) from je
+    if not isinstance(parsed, dict):
+        raise _ResponseValidationError(
+            f"response top-level is not an object: type={type(parsed).__name__}"
+        )
+    rows = parsed.get("extracted_metrics", [])
+    if not isinstance(rows, list):
+        raise _ResponseValidationError(
+            f"`extracted_metrics` is not a list: type={type(rows).__name__}"
+        )
+
+    # Per-row Pydantic validation — drop bad rows, keep the rest. Same
+    # philosophy as POC1: one fabricated row should not poison the whole
+    # metric's result.
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    for row in rows:
+        try:
+            from POC2.models import ExtractedMetricPOC2
+            validated = ExtractedMetricPOC2.model_validate(row)
+        except ValidationError as ve:
+            dropped.append({
+                "row": row,
+                "errors": [
+                    {"loc": list(err.get("loc", ())),
+                     "msg": err.get("msg", ""),
+                     "type": err.get("type", "")}
+                    for err in ve.errors()
+                ],
+            })
+            continue
+        kept.append(validated.model_dump())
+
+    meta = getattr(response, "usage_metadata", None)
+    usage = {
+        "input_tokens": getattr(meta, "prompt_token_count", 0) or 0,
+        "output_tokens": getattr(meta, "candidates_token_count", 0) or 0,
+        "thinking_tokens": getattr(meta, "thinking_token_count", 0) or 0,
+        "total_tokens": getattr(meta, "total_token_count", 0) or 0,
+        "cached_tokens": getattr(meta, "cached_content_token_count", 0) or 0,
+    }
+    if dropped:
+        usage["dropped_rows"] = dropped
+    return kept, usage
+
+
+def _parse_verification(response) -> dict:
+    raw = getattr(response, "text", None) if response is not None else None
+    if not raw:
+        raise _ResponseValidationError("empty verification response")
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as je:
+        raise _ResponseValidationError(f"verification not JSON: {je}") from je
+    try:
+        v = VerificationResponse.model_validate(parsed)
+    except ValidationError as ve:
+        raise _ResponseValidationError(f"verification schema mismatch: {ve}") from ve
+    return v.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Per-metric extraction (one Gemini call, with retries)
+# ---------------------------------------------------------------------------
+
+async def _call_with_retry(
+    *,
+    label: str,
+    client,
+    model: str,
+    contents: str,
+    config: types.GenerateContentConfig,
+    parse_fn: Callable[[Any], Any],
+) -> tuple[Any, dict, int]:
+    """Single Gemini call wrapped in the infinite-retry policy.
+
+    Returns (parsed, usage, attempts).
+    Raises NonRetryablePOC2Failure on permanent failure.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        t0 = time.time()
+        try:
+            response = await client.models.generate_content(
+                model=model, contents=contents, config=config,
+            )
+            parsed = parse_fn(response)
+            if isinstance(parsed, tuple):
+                rows, usage = parsed
+            else:
+                # Verification: parse_fn returns a single dict; no usage info.
+                rows = parsed
+                meta = getattr(response, "usage_metadata", None)
+                usage = {
+                    "input_tokens": getattr(meta, "prompt_token_count", 0) or 0,
+                    "output_tokens": getattr(meta, "candidates_token_count", 0) or 0,
+                    "total_tokens": getattr(meta, "total_token_count", 0) or 0,
+                    "cached_tokens": getattr(meta, "cached_content_token_count", 0) or 0,
+                }
+            return rows, usage, attempt
+        except Exception as e:  # noqa: BLE001
+            elapsed = time.time() - t0
+            err_type = type(e).__name__
+            err_msg = (str(e) or repr(e))[:300]
+            if not _is_retryable(e):
+                tb = traceback.format_exc(limit=3)
+                msg = (f"[{label}] non-retryable {err_type}: {err_msg}\n"
+                       f"{tb}")
+                print(msg)
+                raise NonRetryablePOC2Failure(msg) from e
+            wait = _backoff_seconds(attempt)
+            print(f"[{label}] attempt {attempt} failed in {elapsed:.1f}s "
+                  f"({err_type}: {err_msg[:160]}); retry in {wait:.1f}s")
+            await asyncio.sleep(wait)
+
+
+async def _extract_one_metric(
+    *,
+    metric: MetricDef,
+    client,
+    model: str,
+    cache_name: str,
+    semaphore: asyncio.Semaphore,
+) -> dict:
+    """Issue one cached-content call for one metric. Returns a per-metric log."""
+    label = f"M[{metric['name'][:24]}]"
+    prompt = build_metric_prompt(metric)
+    config = types.GenerateContentConfig(
+        cached_content=cache_name,
+        response_mime_type="application/json",
+        response_schema=Prompt2Response.model_json_schema(),
+        temperature=0.0,
+        top_k=1,
+        seed=42,
+    )
+
+    async with semaphore:
+        t0 = time.time()
+        print(f"[{label}] starting (model={model})")
+        try:
+            rows, usage, attempts = await _call_with_retry(
+                label=label, client=client, model=model,
+                contents=prompt, config=config, parse_fn=_parse_response,
+            )
+        except NonRetryablePOC2Failure:
+            return {
+                "metric": metric["name"], "status": "error",
+                "elapsed_s": round(time.time() - t0, 2),
+                "rows": [], "usage": {}, "attempts": -1,
+            }
+
+    # Drop null-valued rows here — they signal "metric not present", which
+    # POC2's NULL MANDATE allows but the UI doesn't want to display as a hit.
+    non_null = [r for r in rows if r.get("current_year_value") is not None]
+    elapsed = time.time() - t0
+    drop_note = ""
+    if len(rows) != len(non_null):
+        drop_note = f" (dropped {len(rows) - len(non_null)} null rows)"
+    print(f"[{label}] OK — {len(non_null)} disclosure(s){drop_note} in "
+          f"{elapsed:.1f}s | in={usage.get('input_tokens', 0)} "
+          f"out={usage.get('output_tokens', 0)} "
+          f"cached={usage.get('cached_tokens', 0)} "
+          f"| attempts={attempts}")
+    return {
+        "metric": metric["name"], "status": "ok",
+        "elapsed_s": round(elapsed, 2),
+        "rows": non_null,
+        "usage": usage,
+        "attempts": attempts,
+        "raw_row_count": len(rows),
+        "kept_row_count": len(non_null),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Verification layer
+# ---------------------------------------------------------------------------
+
+async def _verify_one(
+    *,
+    item: dict,
+    client,
+    model: str,
+    cache_name: str,
+    semaphore: asyncio.Semaphore,
+) -> dict:
+    label = f"V[{item.get('metric_target', '?')[:24]}]"
+    prompt = build_verification_prompt(item)
+    config = types.GenerateContentConfig(
+        cached_content=cache_name,
+        response_mime_type="application/json",
+        response_schema=VerificationResponse.model_json_schema(),
+        temperature=0.0,
+        top_k=1,
+        seed=42,
+    )
+    async with semaphore:
+        t0 = time.time()
+        try:
+            parsed, usage, _ = await _call_with_retry(
+                label=label, client=client, model=model,
+                contents=prompt, config=config, parse_fn=_parse_verification,
+            )
+        except NonRetryablePOC2Failure:
+            print(f"[{label}] non-retryable failure during verification")
+            return {**item, "verified": False,
+                    "verification_note": "non-retryable error", "verification_usage": {}}
+    elapsed = time.time() - t0
+    print(f"[{label}] {'VERIFIED' if parsed.get('verified') else 'CORRECTION'} "
+          f"in {elapsed:.1f}s — {parsed.get('reason', '')[:120]}")
+    return {
+        **item,
+        "verified": bool(parsed.get("verified")),
+        "verification_note": parsed.get("reason", ""),
+        "verification_usage": usage,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+async def run_extraction(
+    doc: DocPaths2,
+    *,
+    model: str = DEFAULT_MODEL,
+    do_verify: bool = False,
+    concurrency: int = 4,
+    cache_ttl_seconds: int = 7200,
+) -> ExtractionResult:
+    """End-to-end POC2 pipeline. See module docstring for lifecycle."""
+    async_client = make_async_client()
+    # We use the sync client for cache + file lifecycle ops only — the async
+    # client has the same surface but sync caches.create() is simpler to
+    # reason about and we only invoke it twice (create + delete) per run.
+    sync_client = make_sync_client()
+
+    system_instruction = build_system_instruction(doc.company_display, doc.fy_year)
+
+    uploaded_file = None
+    cache = None
+    t_total = time.time()
+
+    print("=" * 70)
+    print(f"POC2 — {model}")
+    print(f"PDF:        {doc.pdf_path}")
+    print(f"Company:    {doc.company_display}   |   FY: {doc.fy_year}")
+    print(f"Metrics:    {len(METRIC_METADATA)}  |  Concurrency: {concurrency}  |  "
+          f"Verify: {do_verify}")
+    print("=" * 70)
+
+    try:
+        # ── 1. Upload PDF ────────────────────────────────────────────────
+        t_up = time.time()
+        print(f"[upload] sending {doc.pdf_path.name} to Gemini Files API…")
+        uploaded_file = sync_client.files.upload(file=str(doc.pdf_path))
+        print(f"[upload] done in {time.time() - t_up:.1f}s — {uploaded_file.name}")
+
+        # Wait until the file is ACTIVE — caches.create() rejects PROCESSING
+        # files. Cheap when the file is already ACTIVE on first poll.
+        t_active = time.time()
+        uploaded_file = _wait_for_active(sync_client, uploaded_file)
+        print(f"[upload] file ACTIVE in {time.time() - t_active:.1f}s")
+
+        # ── 2. Create cache (system instruction + uploaded PDF) ──────────
+        t_cache = time.time()
+        print(f"[cache] creating ttl={cache_ttl_seconds}s …")
+        cache = sync_client.caches.create(
+            model=model,
+            config=types.CreateCachedContentConfig(
+                contents=[uploaded_file],
+                system_instruction=system_instruction,
+                ttl=f"{cache_ttl_seconds}s",
+            ),
+        )
+        print(f"[cache] ready in {time.time() - t_cache:.1f}s — {cache.name}")
+
+        # ── 3. Per-metric extraction (concurrent, bounded) ───────────────
+        semaphore = asyncio.Semaphore(concurrency)
+        per_metric_tasks: list[Awaitable[dict]] = [
+            _extract_one_metric(
+                metric=m, client=async_client, model=model,
+                cache_name=cache.name, semaphore=semaphore,
+            )
+            for m in METRIC_METADATA
+        ]
+        per_metric_results = await asyncio.gather(*per_metric_tasks)
+
+        # Flatten extractions — coverage is computed AFTER the consolidated
+        # filter so the "found/missing" table reflects what actually ships.
+        raw_rows: list[dict] = []
+        for log in per_metric_results:
+            if log["status"] == "ok" and log["rows"]:
+                raw_rows.extend(log["rows"])
+
+        # ── 4. Consolidated > Standalone document-level filter ──────────
+        # If any single metric was tagged Consolidated, drop everything else.
+        # This collapses the entity scope to the company-level (parent +
+        # subsidiaries) view. See apply_consolidated_filter() for rationale.
+        all_rows, cf_stats = apply_consolidated_filter(raw_rows)
+        if cf_stats["consolidated_present"]:
+            print(f"[filter] Consolidated present — dropped "
+                  f"{cf_stats['dropped_non_consolidated']} non-Consolidated "
+                  f"row(s) (kept {cf_stats['rows_out']}/{cf_stats['rows_in']}).")
+        else:
+            print(f"[filter] No Consolidated rows — keeping all "
+                  f"{cf_stats['rows_out']} extracted row(s) as-is.")
+
+        # Coverage map reflects post-filter survivors.
+        surviving_targets = {(r.get("metric_target") or "").strip()
+                             for r in all_rows}
+        coverage: dict[str, bool] = {
+            m["name"]: (m["name"] in surviving_targets) for m in METRIC_METADATA
+        }
+
+        # ── 5. Optional verification ─────────────────────────────────────
+        verified_rows: list[dict] = []
+        if do_verify and all_rows:
+            print(f"[verify] auditing {len(all_rows)} extraction(s) …")
+            v_sem = asyncio.Semaphore(concurrency)
+            verify_tasks = [
+                _verify_one(
+                    item=r, client=async_client, model=model,
+                    cache_name=cache.name, semaphore=v_sem,
+                )
+                for r in all_rows
+            ]
+            verified_rows = await asyncio.gather(*verify_tasks)
+
+        # ── 6. Totals + return ───────────────────────────────────────────
+        total_in = sum(l["usage"].get("input_tokens", 0)
+                       for l in per_metric_results if l.get("usage"))
+        total_out = sum(l["usage"].get("output_tokens", 0)
+                        for l in per_metric_results if l.get("usage"))
+        total_cached = sum(l["usage"].get("cached_tokens", 0)
+                           for l in per_metric_results if l.get("usage"))
+        v_in = sum(r.get("verification_usage", {}).get("input_tokens", 0)
+                   for r in verified_rows)
+        v_out = sum(r.get("verification_usage", {}).get("output_tokens", 0)
+                    for r in verified_rows)
+
+        totals = {
+            "metrics_total": len(METRIC_METADATA),
+            "metrics_found": sum(1 for v in coverage.values() if v),
+            "extractions_raw": len(raw_rows),
+            "extractions_total": len(all_rows),
+            "consolidated_filter": cf_stats,
+            "tokens_in_extraction": total_in,
+            "tokens_out_extraction": total_out,
+            "tokens_cached_hits": total_cached,
+            "tokens_in_verification": v_in,
+            "tokens_out_verification": v_out,
+            "elapsed_seconds": round(time.time() - t_total, 2),
+        }
+
+        print("=" * 70)
+        print("POC2 DONE")
+        print(f"  Metrics found:   {totals['metrics_found']}/{totals['metrics_total']}")
+        print(f"  Extractions:     {totals['extractions_total']}")
+        print(f"  Tokens (extr):   in={total_in:,} out={total_out:,} "
+              f"cached={total_cached:,}")
+        if do_verify:
+            print(f"  Tokens (verify): in={v_in:,} out={v_out:,}")
+        print(f"  Elapsed:         {totals['elapsed_seconds']}s")
+        print("=" * 70)
+
+        return ExtractionResult(
+            company_display=doc.company_display,
+            fy_year=doc.fy_year,
+            model=model,
+            extractions=all_rows,
+            verified=verified_rows,
+            coverage=coverage,
+            per_metric_log=per_metric_results,
+            totals=totals,
+            extractions_raw=raw_rows,
+            consolidated_filter_stats=cf_stats,
+        )
+
+    finally:
+        # Best-effort cleanup. POC2 ethos: nothing persists between runs.
+        if cache is not None:
+            try:
+                sync_client.caches.delete(name=cache.name)
+                print(f"[cleanup] cache deleted: {cache.name}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[cleanup] cache delete failed: {e!r}")
+        if uploaded_file is not None:
+            try:
+                sync_client.files.delete(name=uploaded_file.name)
+                print(f"[cleanup] uploaded file deleted: {uploaded_file.name}")
+            except Exception as e:  # noqa: BLE001
+                print(f"[cleanup] file delete failed: {e!r}")
