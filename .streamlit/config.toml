@@ -10,6 +10,12 @@ headless = true
 port = 8501
 enableCORS = false
 enableXsrfProtection = true
+# Annual-report PDFs can easily exceed Streamlit's 200 MB default. Raise the
+# server-side cap; a reverse proxy in front of the container (nginx, ALB,
+# Cloudflare, HF Spaces, etc.) may impose its own — bump that too if you see
+# 413 in prod.
+maxUploadSize = 1024
+maxMessageSize = 1024
 
 [browser]
 gatherUsageStats = false
