@@ -17,7 +17,9 @@ ENV PYTHONUNBUFFERED=1 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_SERVER_PORT=8501 \
     STREAMLIT_SERVER_HEADLESS=true \
-    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
+    STREAMLIT_SERVER_MAX_UPLOAD_SIZE=1024 \
+    STREAMLIT_SERVER_MAX_MESSAGE_SIZE=1024
 
 # Minimal OS deps: curl for the healthcheck, ca-certificates for HTTPS to the
 # Gemini API. Nothing else — no graphics stack, no Node toolchain.

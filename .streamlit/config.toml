@@ -22,5 +22,9 @@ gatherUsageStats = false
 
 [runner]
 magicEnabled = true
-fastReruns = true
+# Set explicitly: a sidebar/widget interaction during a long extraction must
+# NOT interrupt and restart the in-flight script run. Default is false, but
+# we pin it so future Streamlit versions or upstream toml templates can't
+# silently re-enable mid-run rerunning.
+fastReruns = false
 

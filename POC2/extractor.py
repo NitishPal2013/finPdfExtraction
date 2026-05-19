@@ -15,8 +15,9 @@ Retry policy mirrors POC1.run: infinite retries on transient errors
 (network, 5xx, 429, parse glitches), abort immediately on non-retryable
 errors (auth, 4xx other than 429, code bugs).
 
-Progress is emitted via `print()` so the Streamlit live-log tail in app.py
-keeps working without further wiring.
+Progress is emitted via an optional `progress_callback` injected by the
+caller (Streamlit hands in `st.status.write`). When the callback is omitted
+(CLI runs), events fall back to plain print().
 """
 from __future__ import annotations
 
@@ -295,6 +296,7 @@ async def _call_with_retry(
     contents: str,
     config: types.GenerateContentConfig,
     parse_fn: Callable[[Any], Any],
+    emit: Callable[[str], None],
 ) -> tuple[Any, dict, int]:
     """Single Gemini call wrapped in the infinite-retry policy.
 
@@ -331,11 +333,11 @@ async def _call_with_retry(
                 tb = traceback.format_exc(limit=3)
                 msg = (f"[{label}] non-retryable {err_type}: {err_msg}\n"
                        f"{tb}")
-                print(msg)
+                emit(msg)
                 raise NonRetryablePOC2Failure(msg) from e
             wait = _backoff_seconds(attempt)
-            print(f"[{label}] attempt {attempt} failed in {elapsed:.1f}s "
-                  f"({err_type}: {err_msg[:160]}); retry in {wait:.1f}s")
+            emit(f"[{label}] attempt {attempt} failed in {elapsed:.1f}s "
+                 f"({err_type}: {err_msg[:160]}); retry in {wait:.1f}s")
             await asyncio.sleep(wait)
 
 
@@ -346,6 +348,7 @@ async def _extract_one_metric(
     model: str,
     cache_name: str,
     semaphore: asyncio.Semaphore,
+    emit: Callable[[str], None],
 ) -> dict:
     """Issue one cached-content call for one metric. Returns a per-metric log."""
     label = f"M[{metric['name'][:24]}]"
@@ -361,11 +364,12 @@ async def _extract_one_metric(
 
     async with semaphore:
         t0 = time.time()
-        print(f"[{label}] starting (model={model})")
+        emit(f"[{label}] starting (model={model})")
         try:
             rows, usage, attempts = await _call_with_retry(
                 label=label, client=client, model=model,
                 contents=prompt, config=config, parse_fn=_parse_response,
+                emit=emit,
             )
         except NonRetryablePOC2Failure:
             return {
@@ -381,11 +385,11 @@ async def _extract_one_metric(
     drop_note = ""
     if len(rows) != len(non_null):
         drop_note = f" (dropped {len(rows) - len(non_null)} null rows)"
-    print(f"[{label}] OK — {len(non_null)} disclosure(s){drop_note} in "
-          f"{elapsed:.1f}s | in={usage.get('input_tokens', 0)} "
-          f"out={usage.get('output_tokens', 0)} "
-          f"cached={usage.get('cached_tokens', 0)} "
-          f"| attempts={attempts}")
+    emit(f"[{label}] OK — {len(non_null)} disclosure(s){drop_note} in "
+         f"{elapsed:.1f}s | in={usage.get('input_tokens', 0)} "
+         f"out={usage.get('output_tokens', 0)} "
+         f"cached={usage.get('cached_tokens', 0)} "
+         f"| attempts={attempts}")
     return {
         "metric": metric["name"], "status": "ok",
         "elapsed_s": round(elapsed, 2),
@@ -408,6 +412,7 @@ async def _verify_one(
     model: str,
     cache_name: str,
     semaphore: asyncio.Semaphore,
+    emit: Callable[[str], None],
 ) -> dict:
     label = f"V[{item.get('metric_target', '?')[:24]}]"
     prompt = build_verification_prompt(item)
@@ -425,14 +430,15 @@ async def _verify_one(
             parsed, usage, _ = await _call_with_retry(
                 label=label, client=client, model=model,
                 contents=prompt, config=config, parse_fn=_parse_verification,
+                emit=emit,
             )
         except NonRetryablePOC2Failure:
-            print(f"[{label}] non-retryable failure during verification")
+            emit(f"[{label}] non-retryable failure during verification")
             return {**item, "verified": False,
                     "verification_note": "non-retryable error", "verification_usage": {}}
     elapsed = time.time() - t0
-    print(f"[{label}] {'VERIFIED' if parsed.get('verified') else 'CORRECTION'} "
-          f"in {elapsed:.1f}s — {parsed.get('reason', '')[:120]}")
+    emit(f"[{label}] {'VERIFIED' if parsed.get('verified') else 'CORRECTION'} "
+         f"in {elapsed:.1f}s — {parsed.get('reason', '')[:120]}")
     return {
         **item,
         "verified": bool(parsed.get("verified")),
@@ -452,8 +458,17 @@ async def run_extraction(
     do_verify: bool = False,
     concurrency: int = 4,
     cache_ttl_seconds: int = 7200,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> ExtractionResult:
-    """End-to-end POC2 pipeline. See module docstring for lifecycle."""
+    """End-to-end POC2 pipeline. See module docstring for lifecycle.
+
+    `progress_callback`, if supplied, receives each pipeline event as a single
+    string. The Streamlit UI uses this to drive `st.status.write(...)` directly,
+    so we no longer need to tee stdout from a worker thread. When omitted
+    (e.g. CLI runs), events fall back to plain print().
+    """
+    emit: Callable[[str], None] = progress_callback or print
+
     async_client = make_async_client()
     # We use the sync client for cache + file lifecycle ops only — the async
     # client has the same surface but sync caches.create() is simpler to
@@ -466,30 +481,30 @@ async def run_extraction(
     cache = None
     t_total = time.time()
 
-    print("=" * 70)
-    print(f"POC2 — {model}")
-    print(f"PDF:        {doc.pdf_path}")
-    print(f"Company:    {doc.company_display}   |   FY: {doc.fy_year}")
-    print(f"Metrics:    {len(METRIC_METADATA)}  |  Concurrency: {concurrency}  |  "
-          f"Verify: {do_verify}")
-    print("=" * 70)
+    emit("=" * 70)
+    emit(f"POC2 — {model}")
+    emit(f"PDF:        {doc.pdf_path}")
+    emit(f"Company:    {doc.company_display}   |   FY: {doc.fy_year}")
+    emit(f"Metrics:    {len(METRIC_METADATA)}  |  Concurrency: {concurrency}  |  "
+         f"Verify: {do_verify}")
+    emit("=" * 70)
 
     try:
         # ── 1. Upload PDF ────────────────────────────────────────────────
         t_up = time.time()
-        print(f"[upload] sending {doc.pdf_path.name} to Gemini Files API…")
+        emit(f"[upload] sending {doc.pdf_path.name} to Gemini Files API…")
         uploaded_file = sync_client.files.upload(file=str(doc.pdf_path))
-        print(f"[upload] done in {time.time() - t_up:.1f}s — {uploaded_file.name}")
+        emit(f"[upload] done in {time.time() - t_up:.1f}s — {uploaded_file.name}")
 
         # Wait until the file is ACTIVE — caches.create() rejects PROCESSING
         # files. Cheap when the file is already ACTIVE on first poll.
         t_active = time.time()
         uploaded_file = _wait_for_active(sync_client, uploaded_file)
-        print(f"[upload] file ACTIVE in {time.time() - t_active:.1f}s")
+        emit(f"[upload] file ACTIVE in {time.time() - t_active:.1f}s")
 
         # ── 2. Create cache (system instruction + uploaded PDF) ──────────
         t_cache = time.time()
-        print(f"[cache] creating ttl={cache_ttl_seconds}s …")
+        emit(f"[cache] creating ttl={cache_ttl_seconds}s …")
         cache = sync_client.caches.create(
             model=model,
             config=types.CreateCachedContentConfig(
@@ -498,14 +513,14 @@ async def run_extraction(
                 ttl=f"{cache_ttl_seconds}s",
             ),
         )
-        print(f"[cache] ready in {time.time() - t_cache:.1f}s — {cache.name}")
+        emit(f"[cache] ready in {time.time() - t_cache:.1f}s — {cache.name}")
 
         # ── 3. Per-metric extraction (concurrent, bounded) ───────────────
         semaphore = asyncio.Semaphore(concurrency)
         per_metric_tasks: list[Awaitable[dict]] = [
             _extract_one_metric(
                 metric=m, client=async_client, model=model,
-                cache_name=cache.name, semaphore=semaphore,
+                cache_name=cache.name, semaphore=semaphore, emit=emit,
             )
             for m in METRIC_METADATA
         ]
@@ -524,12 +539,12 @@ async def run_extraction(
         # subsidiaries) view. See apply_consolidated_filter() for rationale.
         all_rows, cf_stats = apply_consolidated_filter(raw_rows)
         if cf_stats["consolidated_present"]:
-            print(f"[filter] Consolidated present — dropped "
-                  f"{cf_stats['dropped_non_consolidated']} non-Consolidated "
-                  f"row(s) (kept {cf_stats['rows_out']}/{cf_stats['rows_in']}).")
+            emit(f"[filter] Consolidated present — dropped "
+                 f"{cf_stats['dropped_non_consolidated']} non-Consolidated "
+                 f"row(s) (kept {cf_stats['rows_out']}/{cf_stats['rows_in']}).")
         else:
-            print(f"[filter] No Consolidated rows — keeping all "
-                  f"{cf_stats['rows_out']} extracted row(s) as-is.")
+            emit(f"[filter] No Consolidated rows — keeping all "
+                 f"{cf_stats['rows_out']} extracted row(s) as-is.")
 
         # Coverage map reflects post-filter survivors.
         surviving_targets = {(r.get("metric_target") or "").strip()
@@ -541,12 +556,12 @@ async def run_extraction(
         # ── 5. Optional verification ─────────────────────────────────────
         verified_rows: list[dict] = []
         if do_verify and all_rows:
-            print(f"[verify] auditing {len(all_rows)} extraction(s) …")
+            emit(f"[verify] auditing {len(all_rows)} extraction(s) …")
             v_sem = asyncio.Semaphore(concurrency)
             verify_tasks = [
                 _verify_one(
                     item=r, client=async_client, model=model,
-                    cache_name=cache.name, semaphore=v_sem,
+                    cache_name=cache.name, semaphore=v_sem, emit=emit,
                 )
                 for r in all_rows
             ]
@@ -578,16 +593,16 @@ async def run_extraction(
             "elapsed_seconds": round(time.time() - t_total, 2),
         }
 
-        print("=" * 70)
-        print("POC2 DONE")
-        print(f"  Metrics found:   {totals['metrics_found']}/{totals['metrics_total']}")
-        print(f"  Extractions:     {totals['extractions_total']}")
-        print(f"  Tokens (extr):   in={total_in:,} out={total_out:,} "
-              f"cached={total_cached:,}")
+        emit("=" * 70)
+        emit("POC2 DONE")
+        emit(f"  Metrics found:   {totals['metrics_found']}/{totals['metrics_total']}")
+        emit(f"  Extractions:     {totals['extractions_total']}")
+        emit(f"  Tokens (extr):   in={total_in:,} out={total_out:,} "
+             f"cached={total_cached:,}")
         if do_verify:
-            print(f"  Tokens (verify): in={v_in:,} out={v_out:,}")
-        print(f"  Elapsed:         {totals['elapsed_seconds']}s")
-        print("=" * 70)
+            emit(f"  Tokens (verify): in={v_in:,} out={v_out:,}")
+        emit(f"  Elapsed:         {totals['elapsed_seconds']}s")
+        emit("=" * 70)
 
         return ExtractionResult(
             company_display=doc.company_display,
@@ -607,12 +622,12 @@ async def run_extraction(
         if cache is not None:
             try:
                 sync_client.caches.delete(name=cache.name)
-                print(f"[cleanup] cache deleted: {cache.name}")
+                emit(f"[cleanup] cache deleted: {cache.name}")
             except Exception as e:  # noqa: BLE001
-                print(f"[cleanup] cache delete failed: {e!r}")
+                emit(f"[cleanup] cache delete failed: {e!r}")
         if uploaded_file is not None:
             try:
                 sync_client.files.delete(name=uploaded_file.name)
-                print(f"[cleanup] uploaded file deleted: {uploaded_file.name}")
+                emit(f"[cleanup] uploaded file deleted: {uploaded_file.name}")
             except Exception as e:  # noqa: BLE001
-                print(f"[cleanup] file delete failed: {e!r}")
+                emit(f"[cleanup] file delete failed: {e!r}")

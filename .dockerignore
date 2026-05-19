@@ -14,7 +14,6 @@ POC1/results/
 
 # IDE / OS cruft
 .claude/
-.streamlit/
 .DS_Store
 .idea/
 .vscode/

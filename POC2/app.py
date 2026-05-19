@@ -7,7 +7,8 @@ Differences from POC1:
     memory for the duration of the session. The PDF itself is a tempfile
     that we unlink as soon as the pipeline returns.
   - Single-document workflow per click. No storage-management sidebar.
-  - Live progress + final results pane + JSON / log downloads.
+  - Live progress (driven by a progress_callback into st.status) + final
+    results pane + JSON downloads.
 
 Run:
   streamlit run POC2/app.py
@@ -28,11 +29,8 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
-import queue as _queue
 import re
 import sys
-import threading as _threading
-import time as _time
 from pathlib import Path
 
 # `streamlit run POC2/app.py` puts POC2/ on sys.path, not the project root —
@@ -54,87 +52,6 @@ from POC2.paths import (  # noqa: E402
     derive_year_from_filename,
     temp_pdf,
 )
-
-
-# ---------------------------------------------------------------------------
-# Live log tailing — same idiom as POC1.app:
-# the pipeline emits per-call progress via plain `print()`. We run it on a
-# worker thread, tee stdout/stderr into a queue, and let the Streamlit main
-# thread drain that queue so the UI updates while the work runs.
-# ---------------------------------------------------------------------------
-
-class _LineTee:
-    def __init__(self, original, q: "_queue.Queue[str | None]") -> None:
-        self._original = original
-        self._q = q
-        self._buf = ""
-
-    def write(self, s: str) -> int:
-        try:
-            self._original.write(s)
-            self._original.flush()
-        except Exception:  # noqa: BLE001
-            pass
-        self._buf += s
-        while "\n" in self._buf:
-            line, self._buf = self._buf.split("\n", 1)
-            self._q.put(line)
-        return len(s)
-
-    def flush(self) -> None:
-        try:
-            self._original.flush()
-        except Exception:  # noqa: BLE001
-            pass
-
-
-def run_pipeline_with_live_logs(*, doc, model, do_verify, concurrency, log_box):
-    """Run async pipeline on a worker thread; tail stdout into log_box.
-
-    Returns (result_or_none, captured_log_lines). Re-raises whatever the
-    worker thread caught so the main thread can branch on the error type.
-    """
-    q: "_queue.Queue[str | None]" = _queue.Queue()
-    captured: list[str] = []
-    result_holder: list = []
-    err_holder: list[BaseException] = []
-
-    def _worker():
-        original_stdout, original_stderr = sys.stdout, sys.stderr
-        try:
-            sys.stdout = _LineTee(original_stdout, q)
-            sys.stderr = _LineTee(original_stderr, q)
-            result = asyncio.run(run_extraction(
-                doc, model=model, do_verify=do_verify, concurrency=concurrency,
-            ))
-            result_holder.append(result)
-        except BaseException as e:  # noqa: BLE001
-            err_holder.append(e)
-        finally:
-            sys.stdout, sys.stderr = original_stdout, original_stderr
-            q.put(None)
-
-    t = _threading.Thread(target=_worker, daemon=True)
-    t.start()
-
-    LIVE_TAIL_LINES = 60
-    while True:
-        try:
-            line = q.get(timeout=0.4)
-        except _queue.Empty:
-            if not t.is_alive():
-                break
-            continue
-        if line is None:
-            break
-        captured.append(line)
-        log_box.code("\n".join(captured[-LIVE_TAIL_LINES:]), language="text")
-        _time.sleep(0.01)
-
-    t.join(timeout=2.0)
-    if err_holder:
-        raise err_holder[0]
-    return result_holder[0] if result_holder else None, captured
 
 
 def _slugify(s: str) -> str:
@@ -163,7 +80,6 @@ st.caption(
 # fresh extraction or hits "Clear results".
 _SS_DEFAULTS: dict[str, object] = {
     "poc2_result": None,         # ExtractionResult dataclass
-    "poc2_logs": [],             # list[str] — captured stdout/stderr
     "poc2_year_stem": "",        # str — used in download filenames
     "poc2_company_supplied": False,
     "poc2_size_mb": 0.0,
@@ -271,7 +187,6 @@ if submit:
         )
 
         new_result = None
-        captured_logs: list[str] = []
         try:
             with st.status("Running pipeline…", expanded=True) as status:
                 status.write(
@@ -281,15 +196,18 @@ if submit:
                 status.write(
                     "Uploading PDF, creating cache, then issuing 37 per-metric calls."
                 )
-                status.write("**Live pipeline log** (last 60 lines):")
-                log_box = status.empty()
-                new_result, captured_logs = run_pipeline_with_live_logs(
-                    doc=doc,
+
+                # Drive live progress directly from the extractor — every event
+                # is appended to the st.status block in order, no worker thread
+                # or stdout tee needed.
+                new_result = asyncio.run(run_extraction(
+                    doc,
                     model=selected_model,
                     do_verify=do_verify,
                     concurrency=concurrency,
-                    log_box=log_box,
-                )
+                    progress_callback=status.write,
+                ))
+
                 if new_result is None:
                     status.update(label="No result returned.", state="error")
                     st.stop()
@@ -308,18 +226,12 @@ if submit:
                 "Fix the underlying issue and re-run."
             )
             st.code(str(e), language="text")
-            if captured_logs:
-                with st.expander("Pipeline log so far"):
-                    st.code("\n".join(captured_logs), language="text")
             st.stop()
         except Exception as e:  # noqa: BLE001
             st.error(f"**Unexpected error:** `{type(e).__name__}: {e}`")
             with st.expander("Full traceback"):
                 import traceback as _tb
                 st.code(_tb.format_exc(), language="text")
-            if captured_logs:
-                with st.expander("Pipeline log so far"):
-                    st.code("\n".join(captured_logs), language="text")
             st.stop()
 
         # Park the result in session_state so download clicks / sidebar
@@ -327,7 +239,6 @@ if submit:
         # this `with temp_pdf` block — that's expected. ExtractionResult is a
         # plain dataclass of JSON-ish primitives, so it survives reruns cleanly.
         st.session_state.poc2_result = new_result
-        st.session_state.poc2_logs = captured_logs
         st.session_state.poc2_year_stem = year_stem
         st.session_state.poc2_company_supplied = bool(company_input.strip())
         st.session_state.poc2_size_mb = file_size_mb
@@ -339,7 +250,6 @@ if submit:
 # ---------------------------------------------------------------------------
 
 result = st.session_state.poc2_result
-captured_logs = st.session_state.poc2_logs
 year_stem = st.session_state.poc2_year_stem
 company_supplied = st.session_state.poc2_company_supplied
 file_size_mb = st.session_state.poc2_size_mb
@@ -421,7 +331,7 @@ extractions_payload = _json.dumps({
     "extractions": result.verified or result.extractions,
 }, indent=2, ensure_ascii=False).encode("utf-8")
 
-dl1, dl2, dl3 = st.columns(3)
+dl1, dl2 = st.columns(2)
 dl1.download_button(
     "Download full result JSON",
     data=full_payload,
@@ -438,20 +348,6 @@ dl2.download_button(
     use_container_width=True,
     help="Just the canonical rows (verified version if verification ran).",
 )
-dl3.download_button(
-    "Download pipeline log",
-    data=("\n".join(captured_logs)).encode("utf-8") if captured_logs else b"(no logs)",
-    file_name=f"{download_basename}.log",
-    mime="text/plain",
-    use_container_width=True,
-    help="Full stdout/stderr from the extraction run.",
-)
-
-with st.expander("Full pipeline logs (most recent run)", expanded=False):
-    if captured_logs:
-        st.code("\n".join(captured_logs), language="text")
-    else:
-        st.caption("No log lines captured.")
 
 
 # ---------------------------------------------------------------------------
