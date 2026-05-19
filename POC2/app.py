@@ -4,13 +4,25 @@ Streamlit UI for the POC2 financial metric extractor.
 Differences from POC1:
   - No PDF rasterization (no `lit` CLI, no images on disk).
   - No persistent results / images / per-window JSON. Everything lives in
-    memory for the duration of the run. The PDF itself is a tempfile that
-    we unlink on exit.
+    memory for the duration of the session. The PDF itself is a tempfile
+    that we unlink as soon as the pipeline returns.
   - Single-document workflow per click. No storage-management sidebar.
   - Live progress + final results pane + JSON / log downloads.
 
 Run:
   streamlit run POC2/app.py
+
+
+Streamlit rerun model — why we use `st.session_state`
+-----------------------------------------------------
+Streamlit re-executes the whole script on every interaction (download button
+click, sidebar widget change, etc.), and `st.button()` only returns True on
+the SCRIPT RUN where the click happened. If we re-derived `result` only when
+`submit` is True, the user clicking any download button (or wiggling the
+sidebar) would rerun the script with `submit=False` and lose the entire
+results page. So we cache the result in `st.session_state` and render the
+view from there on every run. The extraction itself runs only when the user
+explicitly clicks "Run extraction" again.
 """
 from __future__ import annotations
 
@@ -125,6 +137,10 @@ def run_pipeline_with_live_logs(*, doc, model, do_verify, concurrency, log_box):
     return result_holder[0] if result_holder else None, captured
 
 
+def _slugify(s: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", s.lower()) or "company"
+
+
 # ---------------------------------------------------------------------------
 # Page setup
 # ---------------------------------------------------------------------------
@@ -138,9 +154,23 @@ st.title("POC2 — Cached Per-Metric Financial Extractor")
 st.caption(
     "Upload an annual report PDF; the pipeline uploads it once, pins a Gemini "
     "context cache (system instruction + PDF), and dispatches one targeted "
-    "call per metric. No images, no per-window JSON, nothing persisted between "
-    "runs — the cache and the upload are torn down after the result is shown."
+    "call per metric. No images, no per-window JSON, nothing persisted on "
+    "disk — the cache and the upload are torn down after the result is shown."
 )
+
+# Session-state slots. Initialized once per browser session; persists across
+# every rerun (download clicks, sidebar interactions) until the user runs a
+# fresh extraction or hits "Clear results".
+_SS_DEFAULTS: dict[str, object] = {
+    "poc2_result": None,         # ExtractionResult dataclass
+    "poc2_logs": [],             # list[str] — captured stdout/stderr
+    "poc2_year_stem": "",        # str — used in download filenames
+    "poc2_company_supplied": False,
+    "poc2_size_mb": 0.0,
+}
+for _k, _v in _SS_DEFAULTS.items():
+    st.session_state.setdefault(_k, _v)
+
 
 with st.sidebar:
     st.header("Inputs")
@@ -186,98 +216,153 @@ with st.sidebar:
              "and cost for the extraction step.",
     )
     submit = st.button("Run extraction", type="primary", use_container_width=True)
+
+    if st.session_state.poc2_result is not None:
+        if st.button("Clear results", use_container_width=True,
+                     help="Remove the cached extraction from this session so "
+                          "the home screen comes back."):
+            for k, v in _SS_DEFAULTS.items():
+                st.session_state[k] = v
+            st.rerun()
+
     st.caption(
         "POC2 stores nothing on disk between runs. The uploaded PDF is held "
         "in a tempfile only for the duration of the call."
     )
 
 
-if not submit:
+# ---------------------------------------------------------------------------
+# Extraction pass — runs ONLY on the script-run where the user clicked Submit.
+# On success, the result is parked in st.session_state and rendered below.
+# ---------------------------------------------------------------------------
+
+if submit:
+    if pdf_upload is None:
+        st.error("Please upload a PDF.")
+        st.stop()
+
+    year_stem = derive_year_from_filename(pdf_upload.name)
+    if year_stem is None:
+        st.error(
+            f"Could not derive a year from the filename '{pdf_upload.name}'. "
+            "Include digits (e.g. `AR-2023.pdf`, `23.pdf`, `FY24.pdf`)."
+        )
+        st.stop()
+
+    effective_company = (
+        company_input.strip() or "the company in this document"
+    )
+    pdf_bytes = pdf_upload.getvalue()
+    file_size_mb = len(pdf_bytes) / (1024 * 1024)
+
+    # Clear any stale result from a previous extraction the moment a fresh
+    # run begins. Without this, an error halfway through the new run would
+    # leave the user staring at the previous document's results on the next
+    # rerun — quietly wrong. After this point, session_state.poc2_result is
+    # None until the new extraction stores its own result below.
+    for _k, _v in _SS_DEFAULTS.items():
+        st.session_state[_k] = _v
+
+    with temp_pdf(pdf_bytes) as tmp_pdf_path:
+        doc = derive_paths(
+            tmp_pdf_path,
+            company_name=effective_company,
+            year_stem=year_stem,
+        )
+
+        new_result = None
+        captured_logs: list[str] = []
+        try:
+            with st.status("Running pipeline…", expanded=True) as status:
+                status.write(
+                    f"Model: `{selected_model}`  ·  concurrency: `{concurrency}`  "
+                    f"·  verify: `{do_verify}`"
+                )
+                status.write(
+                    "Uploading PDF, creating cache, then issuing 37 per-metric calls."
+                )
+                status.write("**Live pipeline log** (last 60 lines):")
+                log_box = status.empty()
+                new_result, captured_logs = run_pipeline_with_live_logs(
+                    doc=doc,
+                    model=selected_model,
+                    do_verify=do_verify,
+                    concurrency=concurrency,
+                    log_box=log_box,
+                )
+                if new_result is None:
+                    status.update(label="No result returned.", state="error")
+                    st.stop()
+                status.update(
+                    label=f"Done — {new_result.totals['metrics_found']}/"
+                          f"{new_result.totals['metrics_total']} metrics, "
+                          f"{new_result.totals['extractions_total']} "
+                          f"extraction(s) in "
+                          f"{new_result.totals['elapsed_seconds']}s",
+                    state="complete",
+                )
+        except NonRetryablePOC2Failure as e:
+            st.error(
+                "**Pipeline aborted on a non-retryable error.** Most often: "
+                "API key, quota, malformed cache content, or model-not-found. "
+                "Fix the underlying issue and re-run."
+            )
+            st.code(str(e), language="text")
+            if captured_logs:
+                with st.expander("Pipeline log so far"):
+                    st.code("\n".join(captured_logs), language="text")
+            st.stop()
+        except Exception as e:  # noqa: BLE001
+            st.error(f"**Unexpected error:** `{type(e).__name__}: {e}`")
+            with st.expander("Full traceback"):
+                import traceback as _tb
+                st.code(_tb.format_exc(), language="text")
+            if captured_logs:
+                with st.expander("Pipeline log so far"):
+                    st.code("\n".join(captured_logs), language="text")
+            st.stop()
+
+        # Park the result in session_state so download clicks / sidebar
+        # interactions don't wipe it. The tempfile is unlinked at the end of
+        # this `with temp_pdf` block — that's expected. ExtractionResult is a
+        # plain dataclass of JSON-ish primitives, so it survives reruns cleanly.
+        st.session_state.poc2_result = new_result
+        st.session_state.poc2_logs = captured_logs
+        st.session_state.poc2_year_stem = year_stem
+        st.session_state.poc2_company_supplied = bool(company_input.strip())
+        st.session_state.poc2_size_mb = file_size_mb
+
+
+# ---------------------------------------------------------------------------
+# Render pass — runs on EVERY script execution. If session_state doesn't have
+# a result yet, show the home/info banner; otherwise render the cached result.
+# ---------------------------------------------------------------------------
+
+result = st.session_state.poc2_result
+captured_logs = st.session_state.poc2_logs
+year_stem = st.session_state.poc2_year_stem
+company_supplied = st.session_state.poc2_company_supplied
+file_size_mb = st.session_state.poc2_size_mb
+
+if result is None:
     st.info("Upload a PDF (optionally enter a company name) and press "
             "**Run extraction**.")
     st.stop()
 
-if pdf_upload is None:
-    st.error("Please upload a PDF.")
-    st.stop()
-# Company name is optional now — fall back to a generic placeholder so the
-# cached system instruction still substitutes cleanly.
-effective_company = company_input.strip() or "the company in this document"
 
-year_stem = derive_year_from_filename(pdf_upload.name)
-if year_stem is None:
-    st.error(
-        f"Could not derive a year from the filename '{pdf_upload.name}'. "
-        "Include digits (e.g. `AR-2023.pdf`, `23.pdf`, `FY24.pdf`)."
-    )
-    st.stop()
-
-# Write the upload to a tempfile that auto-deletes when the with-block exits.
-pdf_bytes = pdf_upload.getvalue()
-file_size_mb = len(pdf_bytes) / (1024 * 1024)
-
-with temp_pdf(pdf_bytes) as tmp_pdf_path:
-    doc = derive_paths(
-        tmp_pdf_path,
-        company_name=effective_company,
-        year_stem=year_stem,
+# Show a small banner if this isn't the run that produced the result —
+# helps the user notice they're looking at cached output after a download click.
+if not submit:
+    st.caption(
+        "Showing cached results from the most recent extraction in this session. "
+        "Click **Clear results** in the sidebar to return to the upload screen, "
+        "or run a new extraction to overwrite."
     )
 
-    company_note = "" if company_input.strip() else "  *(no company name supplied)*"
-    st.write(f"**Company:** {doc.company_display}{company_note}  |  "
-             f"**FY:** {doc.fy_year}  |  **Size:** {file_size_mb:.1f} MB")
+company_note = "" if company_supplied else "  *(no company name supplied)*"
+st.write(f"**Company:** {result.company_display}{company_note}  |  "
+         f"**FY:** {result.fy_year}  |  **Size:** {file_size_mb:.1f} MB")
 
-    result = None
-    captured_logs: list[str] = []
-    try:
-        with st.status("Running pipeline…", expanded=True) as status:
-            status.write(f"Model: `{selected_model}`  ·  concurrency: `{concurrency}`  "
-                         f"·  verify: `{do_verify}`")
-            status.write("Uploading PDF, creating cache, then issuing 37 per-metric calls.")
-            status.write("**Live pipeline log** (last 60 lines):")
-            log_box = status.empty()
-            result, captured_logs = run_pipeline_with_live_logs(
-                doc=doc,
-                model=selected_model,
-                do_verify=do_verify,
-                concurrency=concurrency,
-                log_box=log_box,
-            )
-            if result is None:
-                status.update(label="No result returned.", state="error")
-                st.stop()
-            status.update(
-                label=f"Done — {result.totals['metrics_found']}/{result.totals['metrics_total']} "
-                      f"metrics, {result.totals['extractions_total']} extraction(s) in "
-                      f"{result.totals['elapsed_seconds']}s",
-                state="complete",
-            )
-    except NonRetryablePOC2Failure as e:
-        st.error(
-            "**Pipeline aborted on a non-retryable error.** Most often: API key, "
-            "quota, malformed cache content, or model-not-found. Fix the underlying "
-            "issue and re-run."
-        )
-        st.code(str(e), language="text")
-        if captured_logs:
-            with st.expander("Pipeline log so far"):
-                st.code("\n".join(captured_logs), language="text")
-        st.stop()
-    except Exception as e:  # noqa: BLE001
-        st.error(f"**Unexpected error:** `{type(e).__name__}: {e}`")
-        with st.expander("Full traceback"):
-            import traceback as _tb
-            st.code(_tb.format_exc(), language="text")
-        if captured_logs:
-            with st.expander("Pipeline log so far"):
-                st.code("\n".join(captured_logs), language="text")
-        st.stop()
-
-
-# ---------------------------------------------------------------------------
-# Result rendering (tempfile is gone at this point — we have an in-memory
-# ExtractionResult and the captured log lines).
-# ---------------------------------------------------------------------------
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Metrics found",
@@ -316,10 +401,7 @@ elif cf.get("rows_out", 0) > 0:
     )
 
 # Downloads — produced in memory; user saves locally if they want a trail.
-def _slugify(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", s.lower()) or "company"
-
-download_basename = f"{_slugify(result.company_display)}_{doc.year_stem}_poc2"
+download_basename = f"{_slugify(result.company_display)}_{year_stem}_poc2"
 full_payload = _json.dumps({
     "company": result.company_display,
     "fy_year": result.fy_year,
@@ -365,7 +447,7 @@ dl3.download_button(
     help="Full stdout/stderr from the extraction run.",
 )
 
-with st.expander("Full pipeline logs (this run)", expanded=False):
+with st.expander("Full pipeline logs (most recent run)", expanded=False):
     if captured_logs:
         st.code("\n".join(captured_logs), language="text")
     else:

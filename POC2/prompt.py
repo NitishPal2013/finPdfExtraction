@@ -138,30 +138,22 @@ def build_metric_prompt(metric: MetricDef) -> str:
     accept/reject lists into the prompt is the only document-specific content
     Gemini sees per call beyond the cache.
     """
-    accepts = ", ".join(metric["accept"]) or "(none — rely on first-principles intent)"
-    rejects = ", ".join(metric["reject"]) or "(none — accept any literal match)"
-    return f"""AUDIT TASK: Extract the metric '{metric["name"]}'.
+    intelligence_rule_addon = ""
+    if any(keyword in metric['name'] for keyword in ["Adjusted", "Normalized", "Core", "Constant"]):
+        intelligence_rule_addon = "\nPRIORITIZATION: Prefer management-adjusted or core versions over reported ones."
+
+    return f"""AUDIT TASK: Extract the metric '{metric['name']}'.
+
+METRIC DEFINITION & DISTINCTION:
+{metric['definition']}
 
 SEMANTIC SEARCH GUIDANCE:
-- SEEK (Common Printed Variants — illustrative, recognize semantic equivalents too): {accepts}
-- DIFFERENTIATE FROM (Reject — CLOSED and BINDING): {rejects}
-- VALUE FORMAT REQUIRED: {metric["type"]}
+- SEEK: {', '.join(metric['accept'])}
+- DIFFERENTIATE FROM: {', '.join(metric['reject'])}
 
-INTELLIGENCE RULE: Differentiate between statutory figures and management's
-adjusted performance. Look for any metric that represents the target after
-one-time adjustments or management-defined normalization where the dictionary
-intent calls for it.
+{intelligence_rule_addon}
+CRITICAL RULE: Match must align with the DEFINITION provided above. If the document label describes a different accounting concept, return null."""
 
-CRITICAL RULE: You must ONLY extract a value if the label in the document
-matches (literally or semantically) one of the SEEK terms AND does not match
-any REJECT term. Do NOT look for proxies, equivalents outside the metric's
-First-Principles intent, or "standard representations" — if an exact or
-semantic match is missing, return `current_year_value: null` (or simply emit
-an empty `extracted_metrics` array).
-
-Return JSON strictly following the `extracted_metrics` schema declared in the
-system instruction. Multiple disclosures of the same metric on different
-pages are fine — emit one row per disclosure with its own page_number."""
 
 
 def build_verification_prompt(item: dict) -> str:
