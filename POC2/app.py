@@ -41,6 +41,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import streamlit as st  # noqa: E402
 
+from POC2.excel_export import build_excel_workbook  # noqa: E402
 from POC2.extractor import (  # noqa: E402
     DEFAULT_MODEL_LABEL,
     MODEL_OPTIONS,
@@ -98,7 +99,7 @@ with st.sidebar:
              "to let the model identify the entity from the document itself.",
     )
     pdf_upload = st.file_uploader(
-        "PDF (filename should include the year, e.g. AR-2023.pdf)",
+        "PDF (filename should include the year, e.g. AR-2023.pdf or 13.pdf)",
         type=["pdf"],
         help="Year is derived from the digits in the filename. "
              "Used only to anchor the temporal column in the prompt.",
@@ -331,7 +332,7 @@ extractions_payload = _json.dumps({
     "extractions": result.verified or result.extractions,
 }, indent=2, ensure_ascii=False).encode("utf-8")
 
-dl1, dl2 = st.columns(2)
+dl1, dl2, dl3 = st.columns(3)
 dl1.download_button(
     "Download full result JSON",
     data=full_payload,
@@ -348,6 +349,15 @@ dl2.download_button(
     use_container_width=True,
     help="Just the canonical rows (verified version if verification ran).",
 )
+dl3.download_button(
+    "Download Excel (.xlsx)",
+    data=build_excel_workbook(result),
+    file_name=f"{download_basename}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    use_container_width=True,
+    help="Multi-sheet workbook: Extractions, Coverage, Summary, Per-Metric Log.",
+)
+
 
 
 # ---------------------------------------------------------------------------
