@@ -35,6 +35,7 @@ import json as _json
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 
 # `streamlit run POC2/app.py` puts POC2/ on sys.path, not the project root —
@@ -50,11 +51,17 @@ from POC2.extractor import (  # noqa: E402
     NonRetryablePOC2Failure,
     run_extraction,
 )
+from POC2.gcs_upload import (  # noqa: E402
+    delete_gcs_object,
+    gcs_object_exists,
+    gcs_pdf_to_temp,
+    generate_signed_put_url,
+    get_upload_bucket,
+)
 from POC2.metrics import METRIC_METADATA  # noqa: E402
 from POC2.paths import (  # noqa: E402
     derive_paths,
     derive_year_from_filename,
-    temp_pdf,
 )
 
 # Hardcoded so non-technical users don't have to think about it. If a future
@@ -81,7 +88,7 @@ class _CheckpointProgress:
     is too noisy for the browser. This callable is wired in as the
     extractor's `progress_callback` and filters those events down to:
 
-      ✓ PDF uploaded (X.X MB)
+      ✓ Sent document to extraction engine
       ✓ Document prepared for analysis
       ⏳ Extracting financial metrics… N / 37        ← live counter on the label
       ✓ Extracted 37 financial metrics
@@ -97,17 +104,19 @@ class _CheckpointProgress:
     _VERIFY_DONE = re.compile(r"^\[V\[.+?\]\] (VERIFIED|CORRECTION)")
     _TOTAL_METRICS = len(METRIC_METADATA)
 
-    def __init__(self, status, file_size_mb: float):
+    def __init__(self, status):
         self.status = status
-        self.file_size_mb = file_size_mb
         self.upload_done = False
         self.cache_done = False
         self.extracted = 0
         self.verify_total = 0
         self.verify_done = 0
         self.extracted_announced = False
-        # Initial label — replaced as soon as the upload completes.
-        status.update(label="⏳ Uploading your document…")
+        # Initial label — replaced as soon as the upload completes. We say
+        # "extraction engine" rather than "uploading" because the user
+        # already uploaded their PDF to cloud storage in the previous step;
+        # this is a separate transfer to the Gemini Files API.
+        status.update(label="⏳ Sending to extraction engine…")
 
     def __call__(self, msg: str) -> None:
         # Always echo to server stdout so ops/debug visibility survives.
@@ -117,7 +126,7 @@ class _CheckpointProgress:
 
         if not self.upload_done and m.startswith("[upload] done in"):
             self.upload_done = True
-            self.status.write(f"✓ PDF uploaded ({self.file_size_mb:.1f} MB)")
+            self.status.write("✓ Sent document to extraction engine")
             self.status.update(label="⏳ Preparing document for analysis…")
             return
 
@@ -195,8 +204,20 @@ st.set_page_config(
 st.title("Financial Metrics Extractor")
 st.caption(
     "Upload an annual report PDF and we'll pull out the key financial "
-    "metrics for the reporting year shown in the filename."
+    "metrics for the reporting year you specify."
 )
+
+# GCS bucket bootstrap. We resolve this once at startup so any
+# misconfiguration (missing env var, missing perms) surfaces a clear error
+# before the user wastes time filling in inputs.
+try:
+    UPLOAD_BUCKET = get_upload_bucket()
+except RuntimeError as e:
+    st.error(
+        f"**Configuration error.** This app expects an upload bucket to be "
+        f"configured.\n\n{e}"
+    )
+    st.stop()
 
 # Session-state slots. Initialized once per browser session; persists across
 # every rerun (download clicks, sidebar interactions) until the user runs a
@@ -213,9 +234,17 @@ _SS_DEFAULTS: dict[str, object] = {
     "poc2_running": False,
     "poc2_started_at": None,     # float — UNIX timestamp when Phase 1 fired
     "poc2_pending_year_stem": "",  # str — year parsed at Phase 1, used by Phase 2
+    # GCS direct-upload session: the JS in the HTML component PUTs to
+    # uploads/<upload_id>.pdf using a signed URL we pass in. The id is
+    # regenerated after each run so a fresh upload always starts clean.
+    "poc2_upload_id": "",
 }
 for _k, _v in _SS_DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
+
+# Ensure we always have a non-empty upload id for the JS component to target.
+if not st.session_state.poc2_upload_id:
+    st.session_state.poc2_upload_id = str(uuid.uuid4())
 
 
 with st.sidebar:
@@ -226,20 +255,156 @@ with st.sidebar:
         help="Required. Embedded in the cached system instruction so the "
              "model anchors on this entity.",
     )
-    pdf_upload = st.file_uploader(
-        "Annual report PDF",
-        type=["pdf"],
-        help="Filename should include the year — e.g. `AR-2023.pdf`, "
-             "`13.pdf`, `FY24.pdf`. The year is parsed from the digits "
-             "and used to pick the right column in the document.",
+    year_input = st.text_input(
+        "Annual report year",
+        placeholder="e.g. 23 (for FY23 / year ending March 31, 2023)",
+        help="Required. Indian Fiscal Year convention — '23' means the year "
+             "ending March 31, 2023. You can also type '2023' or 'FY23'.",
     )
 
+    st.markdown("**Annual report PDF**")
+    upload_id = st.session_state.poc2_upload_id
+    object_name = f"uploads/{upload_id}.pdf"
+
+    # Generate a fresh signed URL on each render. The URL is single-use
+    # (scoped to this exact object_name, valid for 30 minutes) so re-rendering
+    # is cheap and safe — old URLs simply expire.
+    try:
+        signed_url = generate_signed_put_url(object_name)
+    except Exception as e:  # noqa: BLE001
+        st.error(
+            f"Couldn't generate an upload URL. This usually means the Cloud "
+            f"Run service account is missing IAM permissions on the bucket "
+            f"or on itself. See POC2/gcs_upload.py for the required setup.\n\n"
+            f"`{type(e).__name__}: {e}`"
+        )
+        st.stop()
+
+    # HTML+JS component for direct-to-GCS upload. The browser PUTs the file
+    # straight to GCS, bypassing Cloud Run's 32 MiB request body cap.
+    # sessionStorage persists the "uploaded" flag across Streamlit reruns so
+    # typing in the company / year inputs (which retrigger the iframe) doesn't
+    # blank out the success state.
+    upload_html = f"""
+<style>
+  .upload-box {{
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+  }}
+  .upload-box input[type=file] {{
+    width: 100%;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }}
+  .upload-box button {{
+    width: 100%;
+    padding: 6px 12px;
+    background: #ff4b4b;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 500;
+  }}
+  .upload-box button:disabled {{
+    background: #888;
+    cursor: not-allowed;
+  }}
+  .upload-box .status {{
+    margin-top: 10px;
+    padding: 8px;
+    border-radius: 4px;
+    font-size: 12px;
+  }}
+  .upload-box .status.ok   {{ background: #d4edda; color: #155724; }}
+  .upload-box .status.err  {{ background: #f8d7da; color: #721c24; }}
+  .upload-box .status.info {{ background: #e2e3e5; color: #383d41; }}
+</style>
+<div class="upload-box">
+  <div id="picker-row">
+    <input type="file" id="pdf-file" accept="application/pdf"/>
+    <button type="button" id="upload-btn" disabled>Upload to cloud storage</button>
+  </div>
+  <div id="status" class="status info">Choose a PDF, then click upload.</div>
+</div>
+<script>
+  (function() {{
+    const UPLOAD_ID = "{upload_id}";
+    const SIGNED_URL = {_json.dumps(signed_url)};
+    const storageKey = "poc2_uploaded_" + UPLOAD_ID;
+
+    const picker = document.getElementById('pdf-file');
+    const btn = document.getElementById('upload-btn');
+    const status = document.getElementById('status');
+    const pickerRow = document.getElementById('picker-row');
+
+    // If this upload id was already completed in a prior rerun, restore the
+    // success state instead of showing the file picker again.
+    if (sessionStorage.getItem(storageKey) === 'true') {{
+      pickerRow.style.display = 'none';
+      status.className = 'status ok';
+      status.textContent = '✓ PDF uploaded. Fill in the inputs at left and click Run extraction.';
+      return;
+    }}
+
+    function setStatus(cls, text) {{
+      status.className = 'status ' + cls;
+      status.textContent = text;
+    }}
+
+    picker.addEventListener('change', () => {{
+      btn.disabled = !picker.files[0];
+      if (picker.files[0]) {{
+        const mb = (picker.files[0].size / (1024*1024)).toFixed(1);
+        setStatus('info', 'Ready to upload: ' + picker.files[0].name + ' (' + mb + ' MB)');
+      }}
+    }});
+
+    btn.addEventListener('click', async () => {{
+      const file = picker.files[0];
+      if (!file) return;
+      btn.disabled = true;
+      picker.disabled = true;
+      const mb = (file.size / (1024*1024)).toFixed(1);
+      setStatus('info', 'Uploading ' + mb + ' MB to cloud storage…');
+      try {{
+        const res = await fetch(SIGNED_URL, {{
+          method: 'PUT',
+          headers: {{ 'Content-Type': 'application/pdf' }},
+          body: file,
+        }});
+        if (res.ok) {{
+          sessionStorage.setItem(storageKey, 'true');
+          pickerRow.style.display = 'none';
+          setStatus('ok', '✓ PDF uploaded (' + mb + ' MB). Fill in the inputs at left and click Run extraction.');
+        }} else {{
+          const body = await res.text();
+          setStatus('err', 'Upload failed: HTTP ' + res.status + '. ' + body.slice(0, 200));
+          btn.disabled = false;
+          picker.disabled = false;
+        }}
+      }} catch (e) {{
+        setStatus('err', 'Upload failed: ' + e.message);
+        btn.disabled = false;
+        picker.disabled = false;
+      }}
+    }});
+  }})();
+</script>
+""".strip()
+
+    st.components.v1.html(upload_html, height=180)
+
     # Three pieces of state govern the Run button:
-    #   1. Are both required inputs present? (gate)
+    #   1. Are both text inputs present? (company + year — gate)
     #   2. Are we already running a previous click? (lock)
-    # The button is enabled only when (1) AND NOT (2).
+    # We DO NOT check the PDF on the Streamlit side because the JS upload
+    # happens out-of-band; the server-side existence check happens at the
+    # start of Phase 1 below, with a clear error message if the user clicks
+    # Run before the upload completes.
     company_ready = bool(company_input.strip())
-    pdf_ready = pdf_upload is not None
+    year_ready = bool(year_input.strip())
     running_now = st.session_state.poc2_running
 
     if running_now:
@@ -250,17 +415,16 @@ with st.sidebar:
         )
     else:
         button_label = "Run extraction"
-        button_help = (
-            None
-            if (company_ready and pdf_ready)
-            else "Enter a company name and upload a PDF to enable."
-        )
+        if not company_ready or not year_ready:
+            button_help = "Enter a company name and year to enable."
+        else:
+            button_help = "Make sure the PDF upload above shows the ✓ before clicking."
 
     submit = st.button(
         button_label,
         type="primary",
         use_container_width=True,
-        disabled=running_now or not (company_ready and pdf_ready),
+        disabled=running_now or not (company_ready and year_ready),
         help=button_help,
     )
 
@@ -272,74 +436,95 @@ with st.sidebar:
                           "the home screen comes back."):
             for k, v in _SS_DEFAULTS.items():
                 st.session_state[k] = v
+            # Fresh upload id so the next session starts with a clean picker.
+            st.session_state.poc2_upload_id = str(uuid.uuid4())
             st.rerun()
 
 
 # ---------------------------------------------------------------------------
 # Extraction — two-phase rerun.
 #
-# Phase 1 (this script run): user clicked Run. Validate the filename year,
-# flip the `running` flag in session_state, then st.rerun() so the next pass
-# starts with the button visibly disabled.
+# Phase 1 (this script run): user clicked Run. Validate the year input,
+# verify the PDF is in GCS (the browser uploaded it out-of-band via the
+# JS in the sidebar), flip the `running` flag, then st.rerun() so the next
+# pass starts with the button visibly disabled.
 #
-# Phase 2 (next script run): `running` is True. Show the disabled button
-# (handled in the sidebar block above), render the "started at HH:MM:SS"
-# banner + spinner, then block on asyncio.run(). On completion the flag is
-# cleared and the result is atomic-swapped into session_state.
+# Phase 2 (next script run): `running` is True. Download the PDF from GCS
+# into a temp file, render the "started at HH:MM:SS" status block, then
+# block on asyncio.run(). On completion the flag is cleared, the GCS object
+# is best-effort deleted, and the result is atomic-swapped into session_state.
 # ---------------------------------------------------------------------------
 
-# Phase 1 — fresh click. The button gate guarantees both inputs are present.
+# Phase 1 — fresh click.
 if submit and not st.session_state.poc2_running:
-    year_stem = derive_year_from_filename(pdf_upload.name)
+    # Parse the year from whatever the user typed — '23', '2023', 'FY23'
+    # all resolve to year_stem '23' via the same helper that used to read
+    # the filename. We reuse it because the parsing semantics are identical.
+    year_stem = derive_year_from_filename(year_input)
     if year_stem is None:
         st.error(
-            f"Could not read the year from the filename `{pdf_upload.name}`. "
-            "Please rename the file to include the report year — for example "
-            "`AR-2023.pdf`, `23.pdf`, or `FY24.pdf`."
+            f"Couldn't read a year from `{year_input}`. Please enter the "
+            "report year as a 2- or 4-digit number — for example `23`, "
+            "`2023`, or `FY23`."
         )
         st.stop()
+
+    # The PDF lives in GCS only if the JS upload completed. Check before
+    # transitioning so an over-eager click doesn't silently start an
+    # extraction against a missing file.
+    object_name = f"uploads/{st.session_state.poc2_upload_id}.pdf"
+    try:
+        pdf_in_gcs = gcs_object_exists(object_name)
+    except Exception as e:  # noqa: BLE001
+        st.error(
+            f"Couldn't reach cloud storage to verify your upload "
+            f"(`{type(e).__name__}: {e}`). Please try again."
+        )
+        st.stop()
+    if not pdf_in_gcs:
+        st.error(
+            "We don't see your PDF in cloud storage yet. Please wait until "
+            "the green ✓ appears under **Annual report PDF** in the sidebar, "
+            "then click Run extraction again."
+        )
+        st.stop()
+
     st.session_state.poc2_running = True
     st.session_state.poc2_started_at = time.time()
     st.session_state.poc2_pending_year_stem = year_stem
     st.rerun()
 
-# Phase 2 — execute. We get here on the script rerun immediately after Phase 1
-# (and also on any subsequent page reload while the flag is True, since
-# session_state survives reruns — see "interrupted-run recovery" below).
+# Phase 2 — execute.
 if st.session_state.poc2_running:
     # Interrupted-run recovery: if the user reloaded the page mid-run, the
-    # file_uploader and text_input may have lost their state. Bail back to
+    # company / year text inputs may have lost their values. Bail back to
     # the home screen instead of attempting an extraction with no inputs.
-    if pdf_upload is None or not company_input.strip():
-        for _k, _v in _SS_DEFAULTS.items():
-            if _k.startswith("poc2_running") or _k == "poc2_started_at" \
-               or _k == "poc2_pending_year_stem":
-                st.session_state[_k] = _v
+    if not company_input.strip() or not year_input.strip():
+        st.session_state.poc2_running = False
+        st.session_state.poc2_started_at = None
+        st.session_state.poc2_pending_year_stem = ""
         st.warning(
             "Your previous run was interrupted and the inputs were lost. "
-            "Please re-enter the company name and re-upload the PDF, then "
-            "press Run extraction again."
+            "Please re-enter the company name and year, re-upload the PDF, "
+            "then press Run extraction again."
         )
         st.stop()
 
+    object_name = f"uploads/{st.session_state.poc2_upload_id}.pdf"
     started_at = st.session_state.poc2_started_at or time.time()
     started_str = time.strftime("%H:%M:%S", time.localtime(started_at))
 
     year_stem = st.session_state.poc2_pending_year_stem or \
-                derive_year_from_filename(pdf_upload.name) or "00"
+                derive_year_from_filename(year_input) or "00"
     effective_company = company_input.strip()
-    pdf_bytes = pdf_upload.getvalue()
-    file_size_mb = len(pdf_bytes) / (1024 * 1024)
 
     # Atomic-swap pattern: new result is built in a local variable and only
     # written to session_state on success. A mid-run failure leaves the
-    # previous successful result (if any) untouched.
-    #
-    # The st.status block replaces the previous spinner — its `label` is a
-    # live-updating one-liner the user can read at a glance, and each
-    # `status.write(...)` from the checkpoint helper appends a ✓ line inside.
-    # On completion the whole block collapses to the final status line.
+    # previous successful result (if any) untouched. We DO NOT regenerate
+    # the upload_id on failure so the user can retry with the same uploaded
+    # PDF; only success regenerates it.
     new_result = None
+    file_size_mb = 0.0
     with st.status(
         f"⏳ Processing your document — started at {started_str}",
         expanded=True,
@@ -348,9 +533,10 @@ if st.session_state.poc2_running:
             "Please keep this tab open and avoid refreshing while the run "
             "is in progress."
         )
-        progress = _CheckpointProgress(status, file_size_mb)
         try:
-            with temp_pdf(pdf_bytes) as tmp_pdf_path:
+            with gcs_pdf_to_temp(object_name) as tmp_pdf_path:
+                file_size_mb = tmp_pdf_path.stat().st_size / (1024 * 1024)
+                progress = _CheckpointProgress(status)
                 doc = derive_paths(
                     tmp_pdf_path,
                     company_name=effective_company,
@@ -376,7 +562,10 @@ if st.session_state.poc2_running:
                 st.error("The pipeline returned no result. Please try again.")
                 st.stop()
 
-            # Success — finalize checkpoints, collapse the block, atomic-swap.
+            # Success — finalize checkpoints, collapse the block, atomic-swap,
+            # tidy up the GCS object (lifecycle rule is the backstop), and
+            # regenerate the upload_id so the next run starts with a fresh
+            # picker.
             progress.finalize_success()
             status.update(
                 label=(
@@ -387,6 +576,7 @@ if st.session_state.poc2_running:
                 state="complete",
                 expanded=False,
             )
+            delete_gcs_object(object_name)
 
             st.session_state.poc2_result = new_result
             st.session_state.poc2_year_stem = year_stem
@@ -395,6 +585,7 @@ if st.session_state.poc2_running:
             st.session_state.poc2_running = False
             st.session_state.poc2_started_at = None
             st.session_state.poc2_pending_year_stem = ""
+            st.session_state.poc2_upload_id = str(uuid.uuid4())
             st.rerun()
 
         except NonRetryablePOC2Failure:
