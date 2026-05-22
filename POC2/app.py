@@ -227,16 +227,34 @@ _SS_DEFAULTS: dict[str, object] = {
     "poc2_year_stem": "",        # str — used in download filenames
     "poc2_company_supplied": False,
     "poc2_size_mb": 0.0,
-    # Two-phase "running" state. Phase 1 (button click) sets running=True and
-    # st.rerun()s; Phase 2 (the next rerun) shows the disabled button + the
-    # banner with started_at, then blocks on asyncio.run(). Either path clears
-    # the flag before exiting so the UI snaps back to idle.
-    "poc2_running": False,
+    # Two-phase "trigger" state.
+    #
+    # Phase 1 (button click) sets `poc2_trigger_extraction=True` and st.rerun()s
+    # so the next pass renders with the button visibly disabled.
+    #
+    # Phase 2 (next script run) reads the trigger, CONSUMES IT IMMEDIATELY
+    # (sets it back to False before any work starts), then runs the pipeline.
+    # The immediate consumption is critical: if the script is killed mid-pipeline
+    # (Cloud Run request timeout → WebSocket drop → browser auto-reconnect →
+    # Streamlit re-executes the script with session_state intact), Phase 2
+    # MUST NOT re-enter and start a duplicate pipeline. Consuming the trigger
+    # on entry makes Phase 2 a one-shot — the very behaviour that lost a
+    # pipeline mid-run is now what guarantees we don't restart it.
+    #
+    # `poc2_pipeline_was_attempted` is set when Phase 2 enters and cleared at
+    # the end of either the success or error path. If we see was_attempted=True
+    # with trigger=False, we know the run was interrupted (Phase 2 entered but
+    # never reached either cleanup path) and can surface a clear message to
+    # the user.
+    "poc2_trigger_extraction": False,
+    "poc2_pipeline_was_attempted": False,
     "poc2_started_at": None,     # float — UNIX timestamp when Phase 1 fired
     "poc2_pending_year_stem": "",  # str — year parsed at Phase 1, used by Phase 2
     # GCS direct-upload session: the JS in the HTML component PUTs to
     # uploads/<upload_id>.pdf using a signed URL we pass in. The id is
-    # regenerated after each run so a fresh upload always starts clean.
+    # regenerated after each successful run so a fresh upload always starts
+    # clean; we DO NOT regenerate it after an interrupted/failed run so the
+    # user can retry without re-uploading their PDF.
     "poc2_upload_id": "",
 }
 for _k, _v in _SS_DEFAULTS.items():
@@ -398,20 +416,21 @@ with st.sidebar:
 
     # Three pieces of state govern the Run button:
     #   1. Are both text inputs present? (company + year — gate)
-    #   2. Are we already running a previous click? (lock)
+    #   2. Has the user already clicked and we're transitioning to Phase 2?
     # We DO NOT check the PDF on the Streamlit side because the JS upload
     # happens out-of-band; the server-side existence check happens at the
     # start of Phase 1 below, with a clear error message if the user clicks
     # Run before the upload completes.
     company_ready = bool(company_input.strip())
     year_ready = bool(year_input.strip())
-    running_now = st.session_state.poc2_running
+    triggered_now = st.session_state.poc2_trigger_extraction
 
-    if running_now:
+    if triggered_now:
         button_label = "Processing…"
         button_help = (
-            "We're processing your document. Please keep this tab open and "
-            "don't refresh — refreshing will restart the run."
+            "We're processing your document. Please keep this tab open. "
+            "If the run gets interrupted (long pipelines can hit network "
+            "timeouts) the page will tell you and you can click Run again."
         )
     else:
         button_label = "Run extraction"
@@ -424,13 +443,14 @@ with st.sidebar:
         button_label,
         type="primary",
         use_container_width=True,
-        disabled=running_now or not (company_ready and year_ready),
+        disabled=triggered_now or not (company_ready and year_ready),
         help=button_help,
     )
 
     # Clear button only shown when (a) we have a result to clear AND (b) we're
-    # not currently running a fresh extraction (clearing mid-run is confusing).
-    if st.session_state.poc2_result is not None and not running_now:
+    # not currently triggering a fresh extraction (clearing mid-trigger is
+    # confusing).
+    if st.session_state.poc2_result is not None and not triggered_now:
         if st.button("Clear results", use_container_width=True,
                      help="Remove the cached extraction from this session so "
                           "the home screen comes back."):
@@ -442,21 +462,33 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
-# Extraction — two-phase rerun.
+# Extraction — two-phase rerun, with one-shot trigger semantics.
 #
-# Phase 1 (this script run): user clicked Run. Validate the year input,
-# verify the PDF is in GCS (the browser uploaded it out-of-band via the
-# JS in the sidebar), flip the `running` flag, then st.rerun() so the next
-# pass starts with the button visibly disabled.
+# Phase 1 (this script run): user clicked Run. Validate the year, verify the
+# PDF is in GCS, set the trigger flag, then st.rerun() so the next pass
+# renders with the disabled button.
 #
-# Phase 2 (next script run): `running` is True. Download the PDF from GCS
-# into a temp file, render the "started at HH:MM:SS" status block, then
-# block on asyncio.run(). On completion the flag is cleared, the GCS object
-# is best-effort deleted, and the result is atomic-swapped into session_state.
+# Phase 2 (next script run): the trigger is True. CONSUME IT IMMEDIATELY so
+# that any subsequent restart of the script (Cloud Run's WebSocket idle
+# timeout dropping the connection mid-pipeline → browser auto-reconnect →
+# Streamlit re-executes the script with session_state intact) does NOT
+# re-enter Phase 2 and start a duplicate pipeline. This single rule is what
+# fixes the "extraction restarts at 4/37 after the first run already
+# completed" loop the user saw.
 # ---------------------------------------------------------------------------
 
+
+def _clear_extraction_state() -> None:
+    """Reset the per-run flags. Called from every error / completion path so
+    the next click starts clean."""
+    st.session_state.poc2_trigger_extraction = False
+    st.session_state.poc2_pipeline_was_attempted = False
+    st.session_state.poc2_started_at = None
+    st.session_state.poc2_pending_year_stem = ""
+
+
 # Phase 1 — fresh click.
-if submit and not st.session_state.poc2_running:
+if submit and not st.session_state.poc2_trigger_extraction:
     # Parse the year from whatever the user typed — '23', '2023', 'FY23'
     # all resolve to year_stem '23' via the same helper that used to read
     # the filename. We reuse it because the parsing semantics are identical.
@@ -489,20 +521,22 @@ if submit and not st.session_state.poc2_running:
         )
         st.stop()
 
-    st.session_state.poc2_running = True
+    st.session_state.poc2_trigger_extraction = True
     st.session_state.poc2_started_at = time.time()
     st.session_state.poc2_pending_year_stem = year_stem
     st.rerun()
 
-# Phase 2 — execute.
-if st.session_state.poc2_running:
-    # Interrupted-run recovery: if the user reloaded the page mid-run, the
-    # company / year text inputs may have lost their values. Bail back to
-    # the home screen instead of attempting an extraction with no inputs.
+# Phase 2 — execute. CONSUME the trigger before anything else. Once consumed,
+# any subsequent re-execution of this script (reconnect, refresh, etc.) will
+# fall through this block instead of restarting the pipeline.
+if st.session_state.poc2_trigger_extraction:
+    st.session_state.poc2_trigger_extraction = False
+    st.session_state.poc2_pipeline_was_attempted = True
+
+    # Interrupted-run recovery: if the company / year inputs were lost
+    # (e.g. session reset between Phase 1 and Phase 2), bail cleanly.
     if not company_input.strip() or not year_input.strip():
-        st.session_state.poc2_running = False
-        st.session_state.poc2_started_at = None
-        st.session_state.poc2_pending_year_stem = ""
+        _clear_extraction_state()
         st.warning(
             "Your previous run was interrupted and the inputs were lost. "
             "Please re-enter the company name and year, re-upload the PDF, "
@@ -530,8 +564,9 @@ if st.session_state.poc2_running:
         expanded=True,
     ) as status:
         status.write(
-            "Please keep this tab open and avoid refreshing while the run "
-            "is in progress."
+            "Please keep this tab open while the run is in progress. If the "
+            "page does get interrupted, the next view will tell you and you "
+            "can click Run extraction again — no need to re-upload."
         )
         try:
             with gcs_pdf_to_temp(object_name) as tmp_pdf_path:
@@ -556,9 +591,7 @@ if st.session_state.poc2_running:
                     state="error",
                     expanded=True,
                 )
-                st.session_state.poc2_running = False
-                st.session_state.poc2_started_at = None
-                st.session_state.poc2_pending_year_stem = ""
+                _clear_extraction_state()
                 st.error("The pipeline returned no result. Please try again.")
                 st.stop()
 
@@ -582,9 +615,7 @@ if st.session_state.poc2_running:
             st.session_state.poc2_year_stem = year_stem
             st.session_state.poc2_company_supplied = True
             st.session_state.poc2_size_mb = file_size_mb
-            st.session_state.poc2_running = False
-            st.session_state.poc2_started_at = None
-            st.session_state.poc2_pending_year_stem = ""
+            _clear_extraction_state()
             st.session_state.poc2_upload_id = str(uuid.uuid4())
             st.rerun()
 
@@ -594,9 +625,7 @@ if st.session_state.poc2_running:
                 state="error",
                 expanded=True,
             )
-            st.session_state.poc2_running = False
-            st.session_state.poc2_started_at = None
-            st.session_state.poc2_pending_year_stem = ""
+            _clear_extraction_state()
             st.error(
                 "We couldn't process this document. This is usually an API "
                 "key / quota / model availability issue. Please try again, "
@@ -609,9 +638,7 @@ if st.session_state.poc2_running:
                 state="error",
                 expanded=True,
             )
-            st.session_state.poc2_running = False
-            st.session_state.poc2_started_at = None
-            st.session_state.poc2_pending_year_stem = ""
+            _clear_extraction_state()
             st.error(
                 f"Something went wrong while processing this document "
                 f"(`{type(e).__name__}`). Please try again."
@@ -627,6 +654,23 @@ if st.session_state.poc2_running:
 result = st.session_state.poc2_result
 year_stem = st.session_state.poc2_year_stem
 file_size_mb = st.session_state.poc2_size_mb
+
+# Interrupted-run banner. If we get here with `was_attempted=True` and the
+# trigger is False (already consumed), Phase 2 entered the pipeline but
+# never reached either the success or error cleanup path. The most common
+# cause is Cloud Run's request timeout dropping the WebSocket mid-pipeline.
+# Surface this clearly instead of silently dropping the user on a blank page.
+if (st.session_state.poc2_pipeline_was_attempted
+        and not st.session_state.poc2_trigger_extraction):
+    st.session_state.poc2_pipeline_was_attempted = False  # one-shot
+    st.warning(
+        "**Your previous extraction was interrupted before it could finish.** "
+        "This usually means the run took longer than the cloud platform's "
+        "request timeout (typically 5 minutes). Your uploaded PDF is still "
+        "in cloud storage, so just click **Run extraction** again — no need "
+        "to re-upload. For very long PDFs, ask your administrator to raise "
+        "the Cloud Run request timeout."
+    )
 
 if result is None:
     st.info(
