@@ -37,7 +37,6 @@ RUN pip install -r requirements.txt
 
 # Both POC trees ship in the image so the source is browsable on the host,
 # but only POC2 is launchable here (POC1 needs the `lit` CLI from Node).
-COPY POC1/ ./POC1/
 COPY POC2/ ./POC2/
 
 EXPOSE 8501
