@@ -1,14 +1,12 @@
 """
 Streamlit UI for the POC2 financial metric extractor.
 
-Differences from POC1:
-  - No PDF rasterization (no `lit` CLI, no images on disk).
-  - No persistent results / images / per-window JSON. Everything lives in
-    memory for the duration of the session. The PDF itself is a tempfile
-    that we unlink as soon as the pipeline returns.
-  - Single-document workflow per click. No storage-management sidebar.
-  - Live progress (driven by a progress_callback into st.status) + final
-    results pane + JSON downloads.
+Minimalist UX: company name + PDF upload + one button. Model, concurrency,
+and verification are all pinned in code (EXTRACTION_* constants below) so a
+non-technical user sees no knobs. Backend events still print to server
+stdout (visible in `docker logs`) — they are intentionally NOT surfaced in
+the browser, which kept the UI noisy and previously caused long runs to
+appear "frozen" while verification was happening.
 
 Run:
   streamlit run POC2/app.py
@@ -24,6 +22,11 @@ sidebar) would rerun the script with `submit=False` and lose the entire
 results page. So we cache the result in `st.session_state` and render the
 view from there on every run. The extraction itself runs only when the user
 explicitly clicks "Run extraction" again.
+
+Atomic-swap rule: we DO NOT clear session_state when a fresh run starts. The
+new ExtractionResult is built into a local variable and only assigned into
+session_state once the pipeline succeeds. A failed mid-run leaves whatever
+the user had before intact instead of dropping them onto a blank page.
 """
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ import asyncio
 import json as _json
 import re
 import sys
+import time
 from pathlib import Path
 
 # `streamlit run POC2/app.py` puts POC2/ on sys.path, not the project root —
@@ -43,20 +47,140 @@ import streamlit as st  # noqa: E402
 
 from POC2.excel_export import build_excel_workbook  # noqa: E402
 from POC2.extractor import (  # noqa: E402
-    DEFAULT_MODEL_LABEL,
-    MODEL_OPTIONS,
     NonRetryablePOC2Failure,
     run_extraction,
 )
+from POC2.metrics import METRIC_METADATA  # noqa: E402
 from POC2.paths import (  # noqa: E402
     derive_paths,
     derive_year_from_filename,
     temp_pdf,
 )
 
+# Hardcoded so non-technical users don't have to think about it. If a future
+# need arises (e.g. switching to a larger Pro model for harder docs) flip this
+# constant in code — we keep the UI uncluttered.
+EXTRACTION_MODEL = "gemini-3.1-flash-lite"
+EXTRACTION_CONCURRENCY = 4
+# Verification is always on per user direction. It roughly doubles latency on
+# big PDFs but catches "wrong-version-of-the-metric" mistakes from the first
+# pass, which is the whole point of running the audit.
+EXTRACTION_VERIFY = True
+
 
 def _slugify(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", s.lower()) or "company"
+
+
+class _CheckpointProgress:
+    """Translate the extractor's raw event stream into a handful of UI
+    checkpoints that a non-technical user can follow.
+
+    The extractor itself emits dozens of events per run — per-metric start
+    lines, retry warnings, token-usage breakdowns, cleanup messages — which
+    is too noisy for the browser. This callable is wired in as the
+    extractor's `progress_callback` and filters those events down to:
+
+      ✓ PDF uploaded (X.X MB)
+      ✓ Document prepared for analysis
+      ⏳ Extracting financial metrics… N / 37        ← live counter on the label
+      ✓ Extracted 37 financial metrics
+      ⏳ Verifying figures… N / M                    ← live counter on the label
+      ✓ Verified M figures
+
+    Anything that doesn't match a known pattern is forwarded to server
+    stdout (visible via `docker logs`) but not surfaced in the UI.
+    """
+
+    _METRIC_OK = re.compile(r"^\[M\[.+?\]\] OK — ")
+    _VERIFY_START = re.compile(r"^\[verify\] auditing (\d+) extraction")
+    _VERIFY_DONE = re.compile(r"^\[V\[.+?\]\] (VERIFIED|CORRECTION)")
+    _TOTAL_METRICS = len(METRIC_METADATA)
+
+    def __init__(self, status, file_size_mb: float):
+        self.status = status
+        self.file_size_mb = file_size_mb
+        self.upload_done = False
+        self.cache_done = False
+        self.extracted = 0
+        self.verify_total = 0
+        self.verify_done = 0
+        self.extracted_announced = False
+        # Initial label — replaced as soon as the upload completes.
+        status.update(label="⏳ Uploading your document…")
+
+    def __call__(self, msg: str) -> None:
+        # Always echo to server stdout so ops/debug visibility survives.
+        print(msg, flush=True)
+
+        m = msg.strip()
+
+        if not self.upload_done and m.startswith("[upload] done in"):
+            self.upload_done = True
+            self.status.write(f"✓ PDF uploaded ({self.file_size_mb:.1f} MB)")
+            self.status.update(label="⏳ Preparing document for analysis…")
+            return
+
+        if not self.cache_done and m.startswith("[cache] ready in"):
+            self.cache_done = True
+            self.status.write("✓ Document prepared for analysis")
+            self.status.update(
+                label=f"⏳ Extracting financial metrics… 0 / {self._TOTAL_METRICS}"
+            )
+            return
+
+        if self._METRIC_OK.match(m):
+            self.extracted += 1
+            self.status.update(
+                label=(
+                    f"⏳ Extracting financial metrics… "
+                    f"{self.extracted} / {self._TOTAL_METRICS}"
+                )
+            )
+            return
+
+        verify_start = self._VERIFY_START.match(m)
+        if verify_start:
+            self.verify_total = int(verify_start.group(1))
+            if not self.extracted_announced:
+                self.status.write(
+                    f"✓ Extracted {self.extracted} financial metrics"
+                )
+                self.extracted_announced = True
+            self.status.update(
+                label=f"⏳ Verifying figures… 0 / {self.verify_total}"
+            )
+            return
+
+        if self._VERIFY_DONE.match(m):
+            self.verify_done += 1
+            self.status.update(
+                label=(
+                    f"⏳ Verifying figures… "
+                    f"{self.verify_done} / {self.verify_total}"
+                )
+            )
+            return
+
+        # Anything else (banner separators, retries, cleanup) is intentionally
+        # not surfaced in the UI — it's already in server stdout.
+
+    def finalize_success(self) -> None:
+        """Render the closing ✓ lines once asyncio.run() returns successfully.
+
+        Verification-start might never fire (e.g. extraction returned 0 rows),
+        so we guard the 'extracted' checkmark with `extracted_announced` and
+        only emit the 'verified' checkmark if verification actually ran.
+        """
+        if not self.extracted_announced and self.extracted > 0:
+            self.status.write(
+                f"✓ Extracted {self.extracted} financial metrics"
+            )
+            self.extracted_announced = True
+        if self.verify_total > 0:
+            self.status.write(
+                f"✓ Verified {self.verify_done} figure(s)"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -68,12 +192,10 @@ st.set_page_config(
     page_icon="🎯",
     layout="wide",
 )
-st.title("POC2 — Cached Per-Metric Financial Extractor")
+st.title("Financial Metrics Extractor")
 st.caption(
-    "Upload an annual report PDF; the pipeline uploads it once, pins a Gemini "
-    "context cache (system instruction + PDF), and dispatches one targeted "
-    "call per metric. No images, no per-window JSON, nothing persisted on "
-    "disk — the cache and the upload are torn down after the result is shown."
+    "Upload an annual report PDF and we'll pull out the key financial "
+    "metrics for the reporting year shown in the filename."
 )
 
 # Session-state slots. Initialized once per browser session; persists across
@@ -84,6 +206,13 @@ _SS_DEFAULTS: dict[str, object] = {
     "poc2_year_stem": "",        # str — used in download filenames
     "poc2_company_supplied": False,
     "poc2_size_mb": 0.0,
+    # Two-phase "running" state. Phase 1 (button click) sets running=True and
+    # st.rerun()s; Phase 2 (the next rerun) shows the disabled button + the
+    # banner with started_at, then blocks on asyncio.run(). Either path clears
+    # the flag before exiting so the UI snaps back to idle.
+    "poc2_running": False,
+    "poc2_started_at": None,     # float — UNIX timestamp when Phase 1 fired
+    "poc2_pending_year_stem": "",  # str — year parsed at Phase 1, used by Phase 2
 }
 for _k, _v in _SS_DEFAULTS.items():
     st.session_state.setdefault(_k, _v)
@@ -92,49 +221,52 @@ for _k, _v in _SS_DEFAULTS.items():
 with st.sidebar:
     st.header("Inputs")
     company_input = st.text_input(
-        "Company name (optional)",
+        "Company name",
         placeholder="e.g. Jyothy Labs Limited",
-        help="Optional. If provided, it's embedded in the cached system "
-             "instruction so the model anchors on this entity. Leave blank "
-             "to let the model identify the entity from the document itself.",
+        help="Required. Embedded in the cached system instruction so the "
+             "model anchors on this entity.",
     )
     pdf_upload = st.file_uploader(
-        "PDF (filename should include the year, e.g. AR-2023.pdf or 13.pdf)",
+        "Annual report PDF",
         type=["pdf"],
-        help="Year is derived from the digits in the filename. "
-             "Used only to anchor the temporal column in the prompt.",
+        help="Filename should include the year — e.g. `AR-2023.pdf`, "
+             "`13.pdf`, `FY24.pdf`. The year is parsed from the digits "
+             "and used to pick the right column in the document.",
     )
 
-    st.markdown("---")
-    st.header("Pipeline settings")
-    model_labels = list(MODEL_OPTIONS.keys())
-    model_label = st.selectbox(
-        "Gemini model",
-        model_labels,
-        index=model_labels.index(DEFAULT_MODEL_LABEL),
-        help="Caching is supported on Gemini 2.5+ flash/pro lines. If a model "
-             "rejects `cached_content` the SDK will surface a 4xx — swap models "
-             "and rerun.",
-    )
-    selected_model = MODEL_OPTIONS[model_label]
-    st.caption(f"`{selected_model}`")
+    # Three pieces of state govern the Run button:
+    #   1. Are both required inputs present? (gate)
+    #   2. Are we already running a previous click? (lock)
+    # The button is enabled only when (1) AND NOT (2).
+    company_ready = bool(company_input.strip())
+    pdf_ready = pdf_upload is not None
+    running_now = st.session_state.poc2_running
 
-    concurrency = st.slider(
-        "Concurrent metrics",
-        min_value=1, max_value=8, value=4,
-        help="How many per-metric calls run in parallel against the same cache. "
-             "Higher = faster, but more prone to 429s on tight quotas.",
-    )
-    do_verify = st.checkbox(
-        "Run verification layer",
-        value=False,
-        help="For each extracted row, re-ask the cached model whether a more "
-             "adjusted figure was available nearby. Roughly doubles latency "
-             "and cost for the extraction step.",
-    )
-    submit = st.button("Run extraction", type="primary", use_container_width=True)
+    if running_now:
+        button_label = "Processing…"
+        button_help = (
+            "We're processing your document. Please keep this tab open and "
+            "don't refresh — refreshing will restart the run."
+        )
+    else:
+        button_label = "Run extraction"
+        button_help = (
+            None
+            if (company_ready and pdf_ready)
+            else "Enter a company name and upload a PDF to enable."
+        )
 
-    if st.session_state.poc2_result is not None:
+    submit = st.button(
+        button_label,
+        type="primary",
+        use_container_width=True,
+        disabled=running_now or not (company_ready and pdf_ready),
+        help=button_help,
+    )
+
+    # Clear button only shown when (a) we have a result to clear AND (b) we're
+    # not currently running a fresh extraction (clearing mid-run is confusing).
+    if st.session_state.poc2_result is not None and not running_now:
         if st.button("Clear results", use_container_width=True,
                      help="Remove the cached extraction from this session so "
                           "the home screen comes back."):
@@ -142,107 +274,158 @@ with st.sidebar:
                 st.session_state[k] = v
             st.rerun()
 
-    st.caption(
-        "POC2 stores nothing on disk between runs. The uploaded PDF is held "
-        "in a tempfile only for the duration of the call."
-    )
-
 
 # ---------------------------------------------------------------------------
-# Extraction pass — runs ONLY on the script-run where the user clicked Submit.
-# On success, the result is parked in st.session_state and rendered below.
+# Extraction — two-phase rerun.
+#
+# Phase 1 (this script run): user clicked Run. Validate the filename year,
+# flip the `running` flag in session_state, then st.rerun() so the next pass
+# starts with the button visibly disabled.
+#
+# Phase 2 (next script run): `running` is True. Show the disabled button
+# (handled in the sidebar block above), render the "started at HH:MM:SS"
+# banner + spinner, then block on asyncio.run(). On completion the flag is
+# cleared and the result is atomic-swapped into session_state.
 # ---------------------------------------------------------------------------
 
-if submit:
-    if pdf_upload is None:
-        st.error("Please upload a PDF.")
-        st.stop()
-
+# Phase 1 — fresh click. The button gate guarantees both inputs are present.
+if submit and not st.session_state.poc2_running:
     year_stem = derive_year_from_filename(pdf_upload.name)
     if year_stem is None:
         st.error(
-            f"Could not derive a year from the filename '{pdf_upload.name}'. "
-            "Include digits (e.g. `AR-2023.pdf`, `23.pdf`, `FY24.pdf`)."
+            f"Could not read the year from the filename `{pdf_upload.name}`. "
+            "Please rename the file to include the report year — for example "
+            "`AR-2023.pdf`, `23.pdf`, or `FY24.pdf`."
+        )
+        st.stop()
+    st.session_state.poc2_running = True
+    st.session_state.poc2_started_at = time.time()
+    st.session_state.poc2_pending_year_stem = year_stem
+    st.rerun()
+
+# Phase 2 — execute. We get here on the script rerun immediately after Phase 1
+# (and also on any subsequent page reload while the flag is True, since
+# session_state survives reruns — see "interrupted-run recovery" below).
+if st.session_state.poc2_running:
+    # Interrupted-run recovery: if the user reloaded the page mid-run, the
+    # file_uploader and text_input may have lost their state. Bail back to
+    # the home screen instead of attempting an extraction with no inputs.
+    if pdf_upload is None or not company_input.strip():
+        for _k, _v in _SS_DEFAULTS.items():
+            if _k.startswith("poc2_running") or _k == "poc2_started_at" \
+               or _k == "poc2_pending_year_stem":
+                st.session_state[_k] = _v
+        st.warning(
+            "Your previous run was interrupted and the inputs were lost. "
+            "Please re-enter the company name and re-upload the PDF, then "
+            "press Run extraction again."
         )
         st.stop()
 
-    effective_company = (
-        company_input.strip() or "the company in this document"
-    )
+    started_at = st.session_state.poc2_started_at or time.time()
+    started_str = time.strftime("%H:%M:%S", time.localtime(started_at))
+
+    year_stem = st.session_state.poc2_pending_year_stem or \
+                derive_year_from_filename(pdf_upload.name) or "00"
+    effective_company = company_input.strip()
     pdf_bytes = pdf_upload.getvalue()
     file_size_mb = len(pdf_bytes) / (1024 * 1024)
 
-    # Clear any stale result from a previous extraction the moment a fresh
-    # run begins. Without this, an error halfway through the new run would
-    # leave the user staring at the previous document's results on the next
-    # rerun — quietly wrong. After this point, session_state.poc2_result is
-    # None until the new extraction stores its own result below.
-    for _k, _v in _SS_DEFAULTS.items():
-        st.session_state[_k] = _v
-
-    with temp_pdf(pdf_bytes) as tmp_pdf_path:
-        doc = derive_paths(
-            tmp_pdf_path,
-            company_name=effective_company,
-            year_stem=year_stem,
+    # Atomic-swap pattern: new result is built in a local variable and only
+    # written to session_state on success. A mid-run failure leaves the
+    # previous successful result (if any) untouched.
+    #
+    # The st.status block replaces the previous spinner — its `label` is a
+    # live-updating one-liner the user can read at a glance, and each
+    # `status.write(...)` from the checkpoint helper appends a ✓ line inside.
+    # On completion the whole block collapses to the final status line.
+    new_result = None
+    with st.status(
+        f"⏳ Processing your document — started at {started_str}",
+        expanded=True,
+    ) as status:
+        status.write(
+            "Please keep this tab open and avoid refreshing while the run "
+            "is in progress."
         )
-
-        new_result = None
+        progress = _CheckpointProgress(status, file_size_mb)
         try:
-            with st.status("Running pipeline…", expanded=True) as status:
-                status.write(
-                    f"Model: `{selected_model}`  ·  concurrency: `{concurrency}`  "
-                    f"·  verify: `{do_verify}`"
+            with temp_pdf(pdf_bytes) as tmp_pdf_path:
+                doc = derive_paths(
+                    tmp_pdf_path,
+                    company_name=effective_company,
+                    year_stem=year_stem,
                 )
-                status.write(
-                    "Uploading PDF, creating cache, then issuing 37 per-metric calls."
-                )
-
-                # Drive live progress directly from the extractor — every event
-                # is appended to the st.status block in order, no worker thread
-                # or stdout tee needed.
                 new_result = asyncio.run(run_extraction(
                     doc,
-                    model=selected_model,
-                    do_verify=do_verify,
-                    concurrency=concurrency,
-                    progress_callback=status.write,
+                    model=EXTRACTION_MODEL,
+                    do_verify=EXTRACTION_VERIFY,
+                    concurrency=EXTRACTION_CONCURRENCY,
+                    progress_callback=progress,
                 ))
 
-                if new_result is None:
-                    status.update(label="No result returned.", state="error")
-                    st.stop()
+            if new_result is None:
                 status.update(
-                    label=f"Done — {new_result.totals['metrics_found']}/"
-                          f"{new_result.totals['metrics_total']} metrics, "
-                          f"{new_result.totals['extractions_total']} "
-                          f"extraction(s) in "
-                          f"{new_result.totals['elapsed_seconds']}s",
-                    state="complete",
+                    label="❌ No result returned",
+                    state="error",
+                    expanded=True,
                 )
-        except NonRetryablePOC2Failure as e:
-            st.error(
-                "**Pipeline aborted on a non-retryable error.** Most often: "
-                "API key, quota, malformed cache content, or model-not-found. "
-                "Fix the underlying issue and re-run."
+                st.session_state.poc2_running = False
+                st.session_state.poc2_started_at = None
+                st.session_state.poc2_pending_year_stem = ""
+                st.error("The pipeline returned no result. Please try again.")
+                st.stop()
+
+            # Success — finalize checkpoints, collapse the block, atomic-swap.
+            progress.finalize_success()
+            status.update(
+                label=(
+                    f"✅ Done — {new_result.totals['metrics_found']} of "
+                    f"{new_result.totals['metrics_total']} metrics extracted "
+                    f"in {new_result.totals['elapsed_seconds']:.0f}s"
+                ),
+                state="complete",
+                expanded=False,
             )
-            st.code(str(e), language="text")
+
+            st.session_state.poc2_result = new_result
+            st.session_state.poc2_year_stem = year_stem
+            st.session_state.poc2_company_supplied = True
+            st.session_state.poc2_size_mb = file_size_mb
+            st.session_state.poc2_running = False
+            st.session_state.poc2_started_at = None
+            st.session_state.poc2_pending_year_stem = ""
+            st.rerun()
+
+        except NonRetryablePOC2Failure:
+            status.update(
+                label="❌ Could not process this document",
+                state="error",
+                expanded=True,
+            )
+            st.session_state.poc2_running = False
+            st.session_state.poc2_started_at = None
+            st.session_state.poc2_pending_year_stem = ""
+            st.error(
+                "We couldn't process this document. This is usually an API "
+                "key / quota / model availability issue. Please try again, "
+                "or contact support if the problem persists."
+            )
             st.stop()
         except Exception as e:  # noqa: BLE001
-            st.error(f"**Unexpected error:** `{type(e).__name__}: {e}`")
-            with st.expander("Full traceback"):
-                import traceback as _tb
-                st.code(_tb.format_exc(), language="text")
+            status.update(
+                label=f"❌ Unexpected error ({type(e).__name__})",
+                state="error",
+                expanded=True,
+            )
+            st.session_state.poc2_running = False
+            st.session_state.poc2_started_at = None
+            st.session_state.poc2_pending_year_stem = ""
+            st.error(
+                f"Something went wrong while processing this document "
+                f"(`{type(e).__name__}`). Please try again."
+            )
             st.stop()
-
-        # Park the result in session_state so download clicks / sidebar
-        # interactions don't wipe it. The tempfile is unlinked at the end of
-        # this `with temp_pdf` block — that's expected. ExtractionResult is a
-        # plain dataclass of JSON-ish primitives, so it survives reruns cleanly.
-        st.session_state.poc2_result = new_result
-        st.session_state.poc2_year_stem = year_stem
-        st.session_state.poc2_company_supplied = bool(company_input.strip())
-        st.session_state.poc2_size_mb = file_size_mb
 
 
 # ---------------------------------------------------------------------------
@@ -252,12 +435,13 @@ if submit:
 
 result = st.session_state.poc2_result
 year_stem = st.session_state.poc2_year_stem
-company_supplied = st.session_state.poc2_company_supplied
 file_size_mb = st.session_state.poc2_size_mb
 
 if result is None:
-    st.info("Upload a PDF (optionally enter a company name) and press "
-            "**Run extraction**.")
+    st.info(
+        "Enter a company name and upload an annual report PDF in the sidebar, "
+        "then press **Run extraction**."
+    )
     st.stop()
 
 
@@ -270,8 +454,7 @@ if not submit:
         "or run a new extraction to overwrite."
     )
 
-company_note = "" if company_supplied else "  *(no company name supplied)*"
-st.write(f"**Company:** {result.company_display}{company_note}  |  "
+st.write(f"**Company:** {result.company_display}  |  "
          f"**FY:** {result.fy_year}  |  **Size:** {file_size_mb:.1f} MB")
 
 
@@ -379,8 +562,11 @@ st.dataframe(coverage_rows, use_container_width=True, hide_index=True)
 
 source_rows = result.verified or result.extractions
 if not source_rows:
-    st.warning("No metrics were extracted. Try a different model, raise concurrency, "
-               "or inspect the per-metric logs for the reason each metric returned null.")
+    st.warning(
+        "No metrics were extracted from this document. The PDF may not contain "
+        "the disclosures we look for, or the relevant pages may not be machine-"
+        "readable. Try a different annual report."
+    )
     st.stop()
 
 st.divider()
