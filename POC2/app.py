@@ -284,19 +284,38 @@ with st.sidebar:
     upload_id = st.session_state.poc2_upload_id
     object_name = f"uploads/{upload_id}.pdf"
 
-    # Generate a fresh signed URL on each render. The URL is single-use
-    # (scoped to this exact object_name, valid for 30 minutes) so re-rendering
-    # is cheap and safe — old URLs simply expire.
-    try:
-        signed_url = generate_signed_put_url(object_name)
-    except Exception as e:  # noqa: BLE001
-        st.error(
-            f"Couldn't generate an upload URL. This usually means the Cloud "
-            f"Run service account is missing IAM permissions on the bucket "
-            f"or on itself. See POC2/gcs_upload.py for the required setup.\n\n"
-            f"`{type(e).__name__}: {e}`"
-        )
-        st.stop()
+    # Cache the signed URL by upload_id. This is critical: the HTML embedded
+    # in the iframe component below contains the signed URL. If we generated
+    # a fresh URL on every script rerun (every keystroke in the sidebar
+    # inputs), the HTML would change every time and Streamlit would recreate
+    # the iframe — wiping the user's <input type="file"> selection. With
+    # caching, the HTML is byte-identical across reruns, Streamlit reuses
+    # the same iframe, and the picker holds onto the file the user selected.
+    #
+    # Signed URLs are valid for 30 minutes. We refresh after 25 to leave a
+    # 5-min buffer; the only cost is one iframe recreation if the user idles
+    # past 25 minutes, which is rare in normal use.
+    _now = time.time()
+    _url_age = _now - (st.session_state.get("poc2_signed_url_at") or 0)
+    _need_new_url = (
+        st.session_state.get("poc2_signed_url_for") != upload_id
+        or not st.session_state.get("poc2_signed_url")
+        or _url_age > 25 * 60
+    )
+    if _need_new_url:
+        try:
+            st.session_state.poc2_signed_url = generate_signed_put_url(object_name)
+            st.session_state.poc2_signed_url_for = upload_id
+            st.session_state.poc2_signed_url_at = _now
+        except Exception as e:  # noqa: BLE001
+            st.error(
+                f"Couldn't generate an upload URL. This usually means the Cloud "
+                f"Run service account is missing IAM permissions on the bucket "
+                f"or on itself. See POC2/gcs_upload.py for the required setup.\n\n"
+                f"`{type(e).__name__}: {e}`"
+            )
+            st.stop()
+    signed_url = st.session_state.poc2_signed_url
 
     # HTML+JS component for direct-to-GCS upload. The browser PUTs the file
     # straight to GCS, bypassing Cloud Run's 32 MiB request body cap.
