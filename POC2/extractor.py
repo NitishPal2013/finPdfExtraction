@@ -6,8 +6,9 @@ Lifecycle (single run):
   2. Create explicit cached content: system instruction + the uploaded PDF.
   3. For each of the 37 metrics, dispatch a targeted prompt with
      `cached_content=cache.name`. Concurrent with bounded semaphore.
-  4. (Optional) Verification layer — for each found row, ask the model
-     "is this the most adjusted figure on the page?" against the same cache.
+  4. (Optional) Verification layer — false-positive audit: for each found
+     row, ask the model whether the finding is genuinely the target metric
+     (by its definition) and the value is right, against the same cache.
   5. Tear down the cache and uploaded file in `finally` — POC2 does NOT
      persist artifacts to disk under the project tree.
 
@@ -36,6 +37,8 @@ from google.genai import errors as gerrors
 from google.genai import types
 from pydantic import ValidationError
 
+import pandas
+
 # Robust path bootstrap — see POC1.run for the same idiom. Lets us import
 # `POC2.*` whether we were started as a package, a module, or Streamlit's
 # auto-loader.
@@ -46,7 +49,7 @@ if str(_PROJECT_ROOT) not in _sys.path:
 from POC2.gemini_client import make_async_client, make_sync_client
 from POC2.metrics import METRIC_METADATA, MetricDef
 from POC2.models import Prompt2Response, VerificationResponse
-from POC2.paths import DocPaths2
+from POC2.paths import DocPaths2, derive_paths
 from POC2.prompt import (
     build_metric_prompt,
     build_system_instruction,
@@ -68,6 +71,10 @@ MODEL_OPTIONS: dict[str, str] = {
     "Gemini 2.5 Flash-Lite":   "gemini-2.5-flash-lite",
 }
 DEFAULT_MODEL_LABEL = "Gemini 3.1 Flash-Lite"
+
+# Name → definition lookup for the verification layer (false-positive audit
+# needs each found row's metric definition, keyed by its `metric_target`).
+_METRIC_BY_NAME: dict[str, MetricDef] = {m["name"]: m for m in METRIC_METADATA}
 
 
 # Retry policy — mirrors POC1.run.
@@ -94,6 +101,17 @@ class _ResponseValidationError(Exception):
 class NonRetryablePOC2Failure(SystemExit):
     """Raised on errors we won't keep retrying (auth, bad request, etc.).
     Aborts the whole run so the UI can show a clear actionable message."""
+
+
+class PdfTooLargeError(Exception):
+    """The PDF's token count exceeds the model's context window.
+
+    We do NOT auto-split (a single annual report is ~100k–300k tokens and
+    almost never approaches the ~1M window). When it DOES exceed, we skip
+    that document with a clear message rather than silently truncating it.
+    `run_extraction_company` catches this per-PDF and moves on to the next
+    year instead of aborting the whole company.
+    """
 
 
 def _is_retryable(exc: BaseException) -> bool:
@@ -144,6 +162,45 @@ def _wait_for_active(sync_client, file_obj, *, timeout: float = 120.0,
         f"File {file_obj.name} did not reach ACTIVE within {timeout}s "
         f"(last state: {last_state})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Token counting (FREE) + context-window guard
+# ---------------------------------------------------------------------------
+
+# Input context windows for the supported models. The Gemini 2.5 / 3 flash,
+# flash-lite and pro lines all expose a ~1,048,576-token input window; we keep
+# an explicit map so the guard is honest if a future model differs.
+MODEL_CONTEXT_LIMITS: dict[str, int] = {
+    "gemini-3.1-flash-lite": 1_048_576,
+    "gemini-3.1-flash":      1_048_576,
+    "gemini-3-flash-lite":   1_048_576,
+    "gemini-2.5-flash":      1_048_576,
+    "gemini-2.5-flash-lite": 1_048_576,
+}
+DEFAULT_CONTEXT_LIMIT = 1_048_576
+
+
+def context_limit_for(model: str) -> int:
+    """Input-token ceiling for `model` (falls back to the common 1M window)."""
+    return MODEL_CONTEXT_LIMITS.get(model, DEFAULT_CONTEXT_LIMIT)
+
+
+def count_tokens_for_file(sync_client, uploaded_file, *, model: str) -> int | None:
+    """Token count of an uploaded file for `model`. FREE — `count_tokens` is
+    not billed by the Gemini API.
+
+    Returns the integer token count, or None if the API couldn't report it
+    (we treat a counting hiccup as non-fatal — better to attempt extraction
+    than to block a run over a failed pre-flight count).
+    """
+    try:
+        resp = sync_client.models.count_tokens(
+            model=model, contents=[uploaded_file],
+        )
+        return getattr(resp, "total_tokens", None)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +465,7 @@ async def _extract_one_metric(
 async def _verify_one(
     *,
     item: dict,
+    metric: MetricDef,
     client,
     model: str,
     cache_name: str,
@@ -415,7 +473,7 @@ async def _verify_one(
     emit: Callable[[str], None],
 ) -> dict:
     label = f"V[{item.get('metric_target', '?')[:24]}]"
-    prompt = build_verification_prompt(item)
+    prompt = build_verification_prompt(item, metric)
     config = types.GenerateContentConfig(
         cached_content=cache_name,
         response_mime_type="application/json",
@@ -458,6 +516,7 @@ async def run_extraction(
     do_verify: bool = False,
     concurrency: int = 4,
     cache_ttl_seconds: int = 7200,
+    max_input_tokens: int | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> ExtractionResult:
     """End-to-end POC2 pipeline. See module docstring for lifecycle.
@@ -501,6 +560,24 @@ async def run_extraction(
         t_active = time.time()
         uploaded_file = _wait_for_active(sync_client, uploaded_file)
         emit(f"[upload] file ACTIVE in {time.time() - t_active:.1f}s")
+
+        # ── 1b. Pre-flight token count (FREE) + context-window guard ─────
+        # count_tokens is NOT billed. We report the PDF's size so cost is
+        # predictable, and refuse to proceed if it exceeds the model's input
+        # window (we skip rather than auto-split — see PdfTooLargeError).
+        limit = max_input_tokens if max_input_tokens is not None \
+            else context_limit_for(model)
+        n_tokens = count_tokens_for_file(sync_client, uploaded_file, model=model)
+        if n_tokens is None:
+            emit("[tokens] count unavailable — proceeding without guard")
+        else:
+            emit(f"[tokens] PDF ≈ {n_tokens:,} tokens  (limit {limit:,}, "
+                 f"{100 * n_tokens / limit:.0f}% of window)")
+            if n_tokens > limit:
+                raise PdfTooLargeError(
+                    f"PDF is ~{n_tokens:,} tokens, over the {limit:,}-token "
+                    f"window for {model}. Skipped (no auto-split)."
+                )
 
         # ── 2. Create cache (system instruction + uploaded PDF) ──────────
         t_cache = time.time()
@@ -560,7 +637,13 @@ async def run_extraction(
             v_sem = asyncio.Semaphore(concurrency)
             verify_tasks = [
                 _verify_one(
-                    item=r, client=async_client, model=model,
+                    item=r,
+                    metric=_METRIC_BY_NAME.get(
+                        (r.get("metric_target") or "").strip(),
+                        {"name": r.get("metric_target", ""),
+                         "definition": "(definition unavailable)"},
+                    ),
+                    client=async_client, model=model,
                     cache_name=cache.name, semaphore=v_sem, emit=emit,
                 )
                 for r in all_rows
@@ -631,3 +714,160 @@ async def run_extraction(
                 emit(f"[cleanup] uploaded file deleted: {uploaded_file.name}")
             except Exception as e:  # noqa: BLE001
                 emit(f"[cleanup] file delete failed: {e!r}")
+
+
+# ---------------------------------------------------------------------------
+# Company-level driver
+# ---------------------------------------------------------------------------
+
+async def run_extraction_company(
+    company_dir: Path | str,
+    *,
+    model: str = DEFAULT_MODEL,
+    do_verify: bool = False,
+    concurrency: int = 4,
+    cache_ttl_seconds: int = 7200,
+    max_input_tokens: int | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict:
+    """Run the per-document pipeline over every PDF in one company folder.
+
+    Layout (folder name = company, each PDF filename = its FY year):
+        <company_dir>/
+            2021.pdf   2022.pdf   2023.pdf
+
+    For each PDF we derive a DocPaths2 (company ← folder name, year ← filename),
+    run `run_extraction`, and write a per-year workbook NEXT TO the PDF
+    (e.g. 2023.pdf → 2023.xlsx). PDFs are processed SEQUENTIALLY — each
+    `run_extraction` is already internally concurrent across its 37 metrics, so
+    serial documents keep one cache + one upload alive at a time and make cost
+    predictable. A failure on one year (including PdfTooLargeError) is logged
+    and skipped; the remaining years still run.
+
+    Returns a summary dict: company, per-PDF outcomes, and roll-up totals.
+    """
+    emit: Callable[[str], None] = progress_callback or print
+
+    # openpyxl is a heavy import — keep it lazy, matching excel_export's intent.
+    from POC2.excel_export import build_excel_workbook
+
+    company_dir = Path(company_dir)
+    if not company_dir.is_dir():
+        raise NotADirectoryError(f"Not a directory: {company_dir}")
+
+    company_name = company_dir.name
+    pdfs = sorted(company_dir.glob("*.pdf"))
+
+    emit("#" * 70)
+    emit(f"COMPANY: {company_name}  ({len(pdfs)} PDF(s))  |  dir={company_dir}")
+    emit("#" * 70)
+
+    if not pdfs:
+        emit(f"[company] no PDFs found in {company_dir}")
+        return {"company": company_name, "company_dir": str(company_dir),
+                "pdfs": [], "succeeded": 0, "failed": 0, "totals": {}}
+
+    outcomes: list[dict] = []
+    t_company = time.time()
+
+    for pdf in pdfs:
+        doc = derive_paths(pdf, company_name=company_name)
+        emit(f"\n[company] ── {pdf.name}  →  FY {doc.fy_year} ──")
+        try:
+            result = await run_extraction(
+                doc, model=model, do_verify=do_verify, concurrency=concurrency,
+                cache_ttl_seconds=cache_ttl_seconds,
+                max_input_tokens=max_input_tokens, progress_callback=emit,
+            )
+            xlsx_path = pdf.with_suffix(".xlsx")
+            xlsx_path.write_bytes(build_excel_workbook(result))
+            emit(f"[company] saved → {xlsx_path}")
+            outcomes.append({
+                "pdf": pdf.name,
+                "fy_year": doc.fy_year,
+                "status": "ok",
+                "xlsx_path": str(xlsx_path),
+                "metrics_found": result.totals.get("metrics_found"),
+                "extractions": result.totals.get("extractions_total"),
+                "totals": result.totals,
+            })
+        except PdfTooLargeError as e:
+            emit(f"[company] SKIPPED {pdf.name}: {e}")
+            outcomes.append({"pdf": pdf.name, "fy_year": doc.fy_year,
+                             "status": "skipped_too_large", "error": str(e)})
+        except Exception as e:  # noqa: BLE001
+            emit(f"[company] FAILED {pdf.name}: {type(e).__name__}: {e}")
+            outcomes.append({"pdf": pdf.name, "fy_year": doc.fy_year,
+                             "status": "error", "error": f"{type(e).__name__}: {e}"})
+
+    ok = [o for o in outcomes if o["status"] == "ok"]
+    roll_up = {
+        "tokens_in_extraction": sum(o.get("totals", {}).get("tokens_in_extraction", 0) for o in ok),
+        "tokens_out_extraction": sum(o.get("totals", {}).get("tokens_out_extraction", 0) for o in ok),
+        "tokens_cached_hits": sum(o.get("totals", {}).get("tokens_cached_hits", 0) for o in ok),
+    }
+
+    emit("#" * 70)
+    emit(f"COMPANY DONE: {company_name}  |  ok={len(ok)}  "
+         f"failed={len(outcomes) - len(ok)}  |  {time.time() - t_company:.1f}s")
+    emit("#" * 70)
+
+    return {
+        "company": company_name,
+        "company_dir": str(company_dir),
+        "pdfs": outcomes,
+        "succeeded": len(ok),
+        "failed": len(outcomes) - len(ok),
+        "totals": roll_up,
+    }
+
+
+
+
+
+
+# funtion to pdfs_directory
+# extract the information of each company available in and pdfs along with the path => arr[comp] -> if done store the execel path
+# for comp in arr[comp]: run_extraction_comapny() -> once done, merge all the excel in the mega sheet
+
+# PLAN :
+# 1. run one comapny, to ensure the costing before going for the first scale, caching workings
+# Average time to process any video, length of the pdf, 
+# 2. Calculate the token cosumption and caching burn, mechanism to increse the existing cache timing or not, if yes, then track the timing during the process.
+# 3. if the cost < 5k, then we are good to do the scale. 
+
+# run the scale
+
+
+# ---------------------------------------------------------------------------
+# CLI runner — single company (Phase 1 of the PLAN above)
+# ---------------------------------------------------------------------------
+# Filenames like 13.pdf / 14.pdf need NO renaming: derive_year_from_filename
+# already maps "13" → FY13 / March 31, 2013. Just point at the company folder.
+
+# if __name__ == "__main__":
+#     COMPANY_DIR = "pdfs/3M India Ltd"
+
+#     summary = asyncio.run(
+#         run_extraction_company(
+#             COMPANY_DIR,
+#             model=DEFAULT_MODEL,
+#             do_verify=True,
+#             concurrency=5,
+#             cache_ttl_seconds=7200,
+#         )
+#     )
+
+#     print("\n" + "=" * 70)
+#     print(f"SUMMARY — {summary['company']}: "
+#           f"{summary['succeeded']} ok / {summary['failed']} failed")
+#     for o in summary["pdfs"]:
+#         line = f"  {o['pdf']:<10} {o['status']:<18} {o.get('fy_year', '')}"
+#         if o["status"] == "ok":
+#             line += f"  found={o['metrics_found']}  rows={o['extractions']}  → {o['xlsx_path']}"
+#         else:
+#             line += f"  {o.get('error', '')}"
+#         print(line)
+#     print("=" * 70)
+
+

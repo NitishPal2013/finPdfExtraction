@@ -116,11 +116,12 @@ class Prompt2Response(BaseModel):
 
 
 class VerificationResponse(BaseModel):
-    """Self-correction layer response."""
+    """False-positive audit response for one extracted row."""
     verified: bool = Field(
         description=(
-            "True if the originally extracted figure is the most "
-            "adjusted/normalized version available on the page."
+            "True if the extracted figure is genuinely the target metric (per "
+            "its definition) and the value matches the document. False if it is "
+            "the wrong metric (a confusable sibling) or the value is wrong."
         )
     )
     reason: str = Field(

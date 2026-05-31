@@ -156,25 +156,36 @@ CRITICAL RULE: Match must align with the DEFINITION provided above. If the docum
 
 
 
-def build_verification_prompt(item: dict) -> str:
-    """Self-correction challenge: ask the model whether the extracted figure
-    is the most adjusted/normalized version available on the same page."""
+def build_verification_prompt(item: dict, metric: MetricDef) -> str:
+    """False-positive audit for ONE extracted row.
+
+    Confirm the finding is genuinely the target metric (by its DEFINITION) and
+    that the value is right — judged against the full section context already
+    present on the cited page.
+
+    We pass the metric's *definition*, NOT its accept/reject lists. The model
+    should reason about what the metric actually means and whether the finding
+    matches, rather than mechanically checking list membership.
+    """
     target = item.get("metric_target", "")
     value = item.get("current_year_value", "")
     verbatim = item.get("verbatim_source_text", "")
     page = item.get("page_number", "?")
-    return f"""AUDIT CHALLENGE:
-I have extracted '{value}' for the metric '{target}' using verbatim:
-'{verbatim}' on page {page}.
+    definition = metric.get("definition", "(definition unavailable)")
+    return f"""AUDIT: an earlier pass extracted '{value}' for the metric '{target}' \
+from page {page}, quoting:
+'{verbatim}'
 
-TASK:
-1. Is this the MOST adjusted/normalized version of this metric available on
-   the page (or in its immediate vicinity)?
-2. Did I accidentally extract a statutory/plain figure when a management-
-   adjusted figure was available 3-5 lines away or in a 'Highlights' /
-   'Snapshot' / 'Performance at a Glance' section nearby?
-3. If a 'Better Fit' exists on this page, return verified: false and name the
-   better candidate. If this is the truest version on this page, return
-   verified: true.
+WHAT '{target}' MEANS:
+{definition}
+
+Go to that page and read the surrounding context, then decide:
+- Is the quoted line genuinely '{target}' as defined above — and not a similar-
+  looking but different metric (e.g. an absolute figure mistaken for a margin,
+  or a related-but-distinct line item)?
+- Does the value match what the document states for the target period?
+
+Return verified: true if the finding is correct. If it is the wrong metric or the
+value is wrong, return verified: false and explain why in one sentence.
 
 Return JSON: {{"verified": true|false, "reason": "<one sentence>"}}"""
