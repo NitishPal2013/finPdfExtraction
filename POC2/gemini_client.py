@@ -18,11 +18,29 @@ Usage:
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 from google import genai
+
+
+class _DropThoughtSignatureWarning(logging.Filter):
+    """Silence one specific, benign google-genai SDK warning.
+
+    Gemini 3.x thinking models attach a `thought_signature` part to every
+    response. Each time we read `.text` / `.parsed`, the SDK logs
+    "Warning: there are non-text parts in the response: ['thought_signature'] …"
+    The text IS parsed correctly — this is pure noise that floods scale runs.
+    We drop only that message and leave every other SDK log untouched.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003
+        return "non-text parts in the response" not in record.getMessage()
+
+
+logging.getLogger("google_genai.types").addFilter(_DropThoughtSignatureWarning())
 
 
 def _resolve_api_key() -> str:

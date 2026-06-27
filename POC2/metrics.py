@@ -43,7 +43,7 @@ METRIC_METADATA: list[MetricDef] = [
             "discontinued operations to show core top-line performance.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (a top-line figure, NEVER a percentage and NEVER a growth rate).\n"
-            "- BASIS: Adjusted/Normalized/Pro-forma/Core/Non-GAAP — the printed label MUST carry one of these qualifiers attached to Revenue.\n"
+            "- BASIS: Adjusted/Normalized/Pro-forma/Core/Non-GAAP — the printed label MUST carry one of these qualifiers attached to Revenue. Look for explicit 'Adjusted Revenue' table or reconciliation.\n"
             "- NEVER MAP TO THIS BUCKET: plain 'Revenue' / 'Total Revenue' / 'Reported Revenue' / 'Net Revenue' / 'Revenue from Operations' (those are statutory unadjusted figures with no dedicated bucket — return null per the QUALIFIERS rule); 'Constant Currency Revenue' (FX-neutral, separate bucket); any percentage revenue growth rate."
         ),
     },
@@ -56,7 +56,7 @@ METRIC_METADATA: list[MetricDef] = [
             "The bottom-line profit after adjusting for non-cash items, exceptional costs, and tax anomalies.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (a total Rs/USD bottom-line figure — NEVER per-share, NEVER a percentage).\n"
-            "- BASIS: Adjusted — the printed label MUST carry the qualifier 'Adjusted' or 'Underlying' attached to PAT / Earnings / Net Profit / Net Income.\n"
+            "- BASIS: Adjusted — the printed label MUST carry the qualifier 'Adjusted' or 'Underlying' attached to PAT / Earnings / Net Profit / Net Income. Look for explicit presentation in highlights or reconciliations.\n"
             "- NEVER MAP TO THIS BUCKET: Reported PAT / Net Profit / Net Income / Basic Profit (statutory, never adjusted); 'Normalized X' (→ Normalized Earnings), 'Core X' (→ Core Earnings), 'Recurring X' (→ Recurring Earnings) — route by the literal qualifier word on the page; Adjusted EPS (per-share, separate bucket); Adjusted EBIT / Adjusted EBITDA (operating-level, separate buckets)."
         ),
     },
@@ -161,6 +161,7 @@ METRIC_METADATA: list[MetricDef] = [
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (NEVER a percentage).\n"
             "- BASIS: Reported/Statutory — the raw EBIT figure. The printed label MUST NOT carry an 'Adjusted' / 'Normalized' / 'Pro-forma' / 'Core' / 'Underlying' qualifier (those route to Adjusted EBIT).\n"
+            "- LABEL / COMPONENT REQUIREMENT: Look for labels such as 'EBIT', 'PBIT', 'Operating Profit', 'Profit before interest and tax'. The figure must be after operating items but BEFORE interest and tax (D and A have already been subtracted if present).\n"
             "- NEVER MAP TO THIS BUCKET: EBITDA (the 'D' and 'A' matter — do NOT cross-map); Adjusted/Normalized/Underlying EBIT (→ Adjusted EBIT); EBIT Margin (percentage, separate bucket); PBT / Profit before tax (different point in the P&L); Segment Result (segment-level, out of scope per the SEGMENT-QUALIFIED LABELS rule)."
         ),
     },
@@ -174,6 +175,7 @@ METRIC_METADATA: list[MetricDef] = [
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (NEVER a percentage).\n"
             "- BASIS: Reported/Statutory — the raw EBITDA figure. The printed label MUST NOT carry an 'Adjusted' / 'Normalized' / 'Pro-forma' / 'Underlying' qualifier (those route to Adjusted EBITDA).\n"
+            "- LABEL / COMPONENT REQUIREMENT: Prefer direct labels ('EBITDA', 'PBITDA', 'Operating EBITDA') OR labels that represent 'Profit before Depreciation, Interest and Tax (and Amortization)'. The value must correspond to earnings with D+A (and usually I+T) not yet subtracted.\n"
             "- NEVER MAP TO THIS BUCKET: EBIT (Depreciation & Amortization are NOT subtracted in EBITDA — letters matter); Adjusted/Normalized/Pro-forma EBITDA (→ Adjusted EBITDA); EBITDA Margin (percentage, separate bucket); Cash Profit / PAT (different metrics entirely); segment-level or business-line EBITDA."
         ),
     },
@@ -290,7 +292,7 @@ METRIC_METADATA: list[MetricDef] = [
             "Operating cash flow minus capital expenditures (CapEx). Represents cash available for distribution or debt reduction.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (a cash-flow figure).\n"
-            "- BASIS: The specific 'Free Cash Flow' / 'FCF' label — NOT a generic 'cash' line.\n"
+            "- BASIS: The specific 'Free Cash Flow' / 'FCF' label — NOT a generic 'cash' line. Look for explicit presentation or reconciliation that isolates FCF for the target period.\n"
             "- NEVER MAP TO THIS BUCKET: Operating Cash Flow / CFO (broader, pre-CapEx — separate concept); Funds From Operations / FFO (→ FFO); Distributable Cash Flow (→ Distributable Cash Flow); FCFE / FCFF variants (equity vs firm — out of scope here); generic Cash & Cash Equivalents."
         ),
     },
@@ -330,6 +332,7 @@ METRIC_METADATA: list[MetricDef] = [
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (positive when the company is a net borrower; negative when net cash).\n"
             "- BASIS: The specific 'Net Debt' / 'Net Borrowings' label — the netting against cash has ALREADY been done by the issuer.\n"
+            "- COMPANY DEFINITION SUPPORT: Many reports explicitly state the formula (example: 'Net Debt is interest-bearing loans and borrowings less cash and cash equivalents'). Use such definitions to locate the presented figure, but the printed label must still be a Net Debt variant.\n"
             "- NEVER MAP TO THIS BUCKET: Gross Debt / Total Debt / Total Borrowings / Total Liabilities (NOT netted against cash); standalone Long-term or Short-term Borrowings line items; Net Surplus Cash (→ separate bucket — the opposite-sign concept)."
         ),
     },

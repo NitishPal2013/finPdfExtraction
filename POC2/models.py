@@ -57,18 +57,19 @@ class ExtractedMetricPOC2(BaseModel):
     forensic_reasoning_log: str = Field(
         default="",
         description=(
-            "Concise audit trail proving the printed label denotes the target "
-            "per its semantic principles, is not on the Reject list, and the "
-            "value matches the required Value Format. MUST NOT contain "
-            "forbidden reasoning phrases (closest proxy / derived / subtract / "
-            "I will use X / context suggests …)."
+            "Rich audit trail (following the structured STEP format in the system prompt). "
+            "Must include: exact table/section name, explicit company label or definition quote, "
+            "alignment to metric definition (incl. Profit-before components for EBITDA/EBIT), "
+            "Consolidated priority justification, verbatim + page/column/year match, and confirmation "
+            "of no forbidden derivation or Reject-list hits. MUST NOT contain forbidden reasoning phrases."
         ),
     )
     entity_context: EntityContext = Field(
         default="Unclear",
         description=(
-            "Consolidated | Standalone | Unclear based on the most recent "
-            "section header visible. Never default to Consolidated."
+            "Consolidated | Standalone | Unclear. MUST follow the CONSOLIDATED PREFERENCE RULE: "
+            "search Consolidated statements first for this metric; return Consolidated if any match found for the metric; "
+            "only use Standalone if zero Consolidated disclosures for this exact metric exist in the document."
         ),
     )
     source_type: SourceType = Field(
@@ -101,10 +102,26 @@ class ExtractedMetricPOC2(BaseModel):
         default=None,
         description="Absolute document page number where this was found.",
     )
+    table_or_section: Optional[str] = Field(
+        default=None,
+        description=(
+            "Specific table title, note number, or section header where the value was found "
+            "(e.g. 'Note 45 - Borrowings', 'MD&A - Financial Highlights table', 'Consolidated Statement of Profit and Loss')."
+        ),
+    )
+    company_definition_quote: Optional[str] = Field(
+        default=None,
+        description=(
+            "If the company explicitly defines or gives a formula for this metric near the value "
+            "(e.g. 'Net debt is defined as interest-bearing loans and borrowings less cash and cash equivalents'), quote it verbatim here."
+        ),
+    )
 
 
 class Prompt2Response(BaseModel):
-    """Top-level response shape — model must return this exact wrapper."""
+    """Top-level response shape — model must return this exact wrapper.
+    Each ExtractedMetricPOC2 now supports richer optional fields (table_or_section, company_definition_quote)
+    in addition to the enhanced forensic_reasoning_log."""
     extracted_metrics: list[ExtractedMetricPOC2] = Field(
         default_factory=list,
         description=(

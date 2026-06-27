@@ -130,6 +130,22 @@ def _backoff_seconds(attempt: int) -> float:
     return base * (0.8 + 0.4 * random.random())
 
 
+def _noop(_msg: str) -> None:
+    """Silent progress sink — used for scale runs to suppress per-metric logs."""
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Human-readable duration: 4521s → '1h 15m 21s'."""
+    s = int(round(seconds))
+    h, rem = divmod(s, 3600)
+    m, sec = divmod(rem, 60)
+    if h:
+        return f"{h}h {m}m {sec}s"
+    if m:
+        return f"{m}m {sec}s"
+    return f"{sec}s"
+
+
 # ---------------------------------------------------------------------------
 # Files API readiness gate
 # ---------------------------------------------------------------------------
@@ -204,39 +220,60 @@ def count_tokens_for_file(sync_client, uploaded_file, *, model: str) -> int | No
 
 
 # ---------------------------------------------------------------------------
-# Consolidated > Standalone document-level filter
+# Per-metric Consolidated > Standalone filter (implements user's ground rule)
 # ---------------------------------------------------------------------------
 
 def apply_consolidated_filter(rows: list[dict]) -> tuple[list[dict], dict]:
-    """Document-level rule (user-defined):
-       If ANY extracted row has entity_context == 'Consolidated', drop every
-       row whose entity_context is not 'Consolidated'. Otherwise leave the
-       set untouched.
+    """Per-metric Consolidated preference rule (user-defined ground rule):
+       For each metric independently:
+         - If ANY row for that metric has entity_context == 'Consolidated',
+           keep ONLY the Consolidated rows for that metric.
+         - Otherwise keep the rows (Standalone or Unclear) for that metric.
 
-    Rationale: when an Indian annual report publishes consolidated statements,
-    standalone numbers describe just the parent entity (excluding subsidiaries)
-    and the consolidated set is the company-level truth. Mixing both in the
-    output muddles the entity scope.
+    This implements: "if the company has consolidated metrics [for a given metric],
+    then we only consider consolidated ones; if absolutely absent for that metric,
+    then standalone."
 
-    Returns (filtered_rows, stats_dict).
+    Returns (filtered_rows, stats_dict) where stats still report aggregate drops
+    for transparency (the 'consolidated_present' now means 'at least one metric
+    had Consolidated rows that caused filtering').
     """
-    has_consolidated = any(
-        (r.get("entity_context") or "").strip() == "Consolidated" for r in rows
-    )
-    if not has_consolidated:
-        return list(rows), {
+    if not rows:
+        return [], {
             "consolidated_present": False,
-            "rows_in": len(rows),
-            "rows_out": len(rows),
+            "rows_in": 0,
+            "rows_out": 0,
             "dropped_non_consolidated": 0,
         }
-    kept = [r for r in rows
-            if (r.get("entity_context") or "").strip() == "Consolidated"]
+
+    from collections import defaultdict
+    by_metric: dict[str, list[dict]] = defaultdict(list)
+    for r in rows:
+        key = (r.get("metric_target") or "").strip() or "__unknown__"
+        by_metric[key].append(r)
+
+    kept: list[dict] = []
+    total_dropped = 0
+    any_consol = False
+
+    for mkey, group in by_metric.items():
+        has_consol = any(
+            (r.get("entity_context") or "").strip() == "Consolidated" for r in group
+        )
+        if has_consol:
+            any_consol = True
+            kept_for_m = [r for r in group
+                          if (r.get("entity_context") or "").strip() == "Consolidated"]
+            total_dropped += len(group) - len(kept_for_m)
+            kept.extend(kept_for_m)
+        else:
+            kept.extend(group)
+
     return kept, {
-        "consolidated_present": True,
+        "consolidated_present": any_consol,
         "rows_in": len(rows),
         "rows_out": len(kept),
-        "dropped_non_consolidated": len(rows) - len(kept),
+        "dropped_non_consolidated": total_dropped,
     }
 
 
@@ -251,7 +288,7 @@ class ExtractionResult:
     coverage: dict[str, bool] = field(default_factory=dict)
     per_metric_log: list[dict] = field(default_factory=list)
     totals: dict[str, Any] = field(default_factory=dict)
-    # Raw rows BEFORE the Consolidated > Standalone document-level filter.
+    # Raw rows BEFORE the per-metric Consolidated filter.
     # Kept for transparency / audit — UI can show the dropped count.
     extractions_raw: list[dict] = field(default_factory=list)
     consolidated_filter_stats: dict[str, Any] = field(default_factory=dict)
@@ -415,6 +452,7 @@ async def _extract_one_metric(
         response_mime_type="application/json",
         response_schema=Prompt2Response.model_json_schema(),
         temperature=0.0,
+        # thinking_config removed for compatibility with current google-genai SDK + flash-lite
         top_k=1,
         seed=42,
     )
@@ -610,17 +648,16 @@ async def run_extraction(
             if log["status"] == "ok" and log["rows"]:
                 raw_rows.extend(log["rows"])
 
-        # ── 4. Consolidated > Standalone document-level filter ──────────
-        # If any single metric was tagged Consolidated, drop everything else.
-        # This collapses the entity scope to the company-level (parent +
-        # subsidiaries) view. See apply_consolidated_filter() for rationale.
+        # ── 4. Consolidated > Standalone per-metric filter ─────────────
+        # Per the ground rule: for each metric, keep Consolidated if present for
+        # that metric; otherwise keep Standalone. See apply_consolidated_filter().
         all_rows, cf_stats = apply_consolidated_filter(raw_rows)
         if cf_stats["consolidated_present"]:
-            emit(f"[filter] Consolidated present — dropped "
+            emit(f"[filter] Consolidated present for some metric(s) — dropped "
                  f"{cf_stats['dropped_non_consolidated']} non-Consolidated "
-                 f"row(s) (kept {cf_stats['rows_out']}/{cf_stats['rows_in']}).")
+                 f"row(s) for those metrics (kept {cf_stats['rows_out']}/{cf_stats['rows_in']}).")
         else:
-            emit(f"[filter] No Consolidated rows — keeping all "
+            emit(f"[filter] No Consolidated rows for any metric — keeping all "
                  f"{cf_stats['rows_out']} extracted row(s) as-is.")
 
         # Coverage map reflects post-filter survivors.
@@ -728,6 +765,9 @@ async def run_extraction_company(
     concurrency: int = 4,
     cache_ttl_seconds: int = 7200,
     max_input_tokens: int | None = None,
+    force: bool = False,
+    quiet: bool = False,
+    on_pdf_done: Callable[[dict], None] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> dict:
     """Run the per-document pipeline over every PDF in one company folder.
@@ -744,9 +784,20 @@ async def run_extraction_company(
     predictable. A failure on one year (including PdfTooLargeError) is logged
     and skipped; the remaining years still run.
 
+    `force=False` (default) is the RESUME GUARD: any PDF whose `.xlsx` already
+    exists is skipped (status "skipped_exists") with no API calls — so a re-run
+    after a crash only processes the years that didn't finish. Pass `force=True`
+    to re-extract and overwrite existing workbooks.
+
+    `quiet` silences the verbose per-metric/upload/cache logs (the scale run
+    wants only compact progress). `on_pdf_done(outcome)` is invoked once per PDF
+    with its outcome dict (including `elapsed_s`) — the directory driver uses it
+    to keep a running processed-count + timing. When `on_pdf_done` is omitted,
+    a compact one-line progress is printed per PDF.
+
     Returns a summary dict: company, per-PDF outcomes, and roll-up totals.
     """
-    emit: Callable[[str], None] = progress_callback or print
+    emit: Callable[[str], None] = _noop if quiet else (progress_callback or print)
 
     # openpyxl is a heavy import — keep it lazy, matching excel_export's intent.
     from POC2.excel_export import build_excel_workbook
@@ -772,35 +823,59 @@ async def run_extraction_company(
 
     for pdf in pdfs:
         doc = derive_paths(pdf, company_name=company_name)
-        emit(f"\n[company] ── {pdf.name}  →  FY {doc.fy_year} ──")
-        try:
-            result = await run_extraction(
-                doc, model=model, do_verify=do_verify, concurrency=concurrency,
-                cache_ttl_seconds=cache_ttl_seconds,
-                max_input_tokens=max_input_tokens, progress_callback=emit,
-            )
-            xlsx_path = pdf.with_suffix(".xlsx")
-            xlsx_path.write_bytes(build_excel_workbook(result))
-            emit(f"[company] saved → {xlsx_path}")
-            outcomes.append({
-                "pdf": pdf.name,
-                "fy_year": doc.fy_year,
-                "status": "ok",
-                "xlsx_path": str(xlsx_path),
-                "metrics_found": result.totals.get("metrics_found"),
-                "extractions": result.totals.get("extractions_total"),
-                "totals": result.totals,
-            })
-        except PdfTooLargeError as e:
-            emit(f"[company] SKIPPED {pdf.name}: {e}")
-            outcomes.append({"pdf": pdf.name, "fy_year": doc.fy_year,
-                             "status": "skipped_too_large", "error": str(e)})
-        except Exception as e:  # noqa: BLE001
-            emit(f"[company] FAILED {pdf.name}: {type(e).__name__}: {e}")
-            outcomes.append({"pdf": pdf.name, "fy_year": doc.fy_year,
-                             "status": "error", "error": f"{type(e).__name__}: {e}"})
+        xlsx_path = pdf.with_suffix(".xlsx")
+        t_pdf = time.time()
+
+        if xlsx_path.exists() and not force:
+            # Resume guard — this year already produced a workbook on a prior
+            # run. Skip it (no API calls). Pass force=True to redo + overwrite.
+            emit(f"\n[company] ── {pdf.name} → already done "
+                 f"({xlsx_path.name}), skipping ──")
+            outcome = {"company": company_name, "pdf": pdf.name,
+                       "fy_year": doc.fy_year, "status": "skipped_exists",
+                       "xlsx_path": str(xlsx_path)}
+        else:
+            emit(f"\n[company] ── {pdf.name}  →  FY {doc.fy_year} ──")
+            try:
+                result = await run_extraction(
+                    doc, model=model, do_verify=do_verify, concurrency=concurrency,
+                    cache_ttl_seconds=cache_ttl_seconds,
+                    max_input_tokens=max_input_tokens, progress_callback=emit,
+                )
+                xlsx_path.write_bytes(build_excel_workbook(result))
+                emit(f"[company] saved → {xlsx_path}")
+                outcome = {
+                    "company": company_name,
+                    "pdf": pdf.name,
+                    "fy_year": doc.fy_year,
+                    "status": "ok",
+                    "xlsx_path": str(xlsx_path),
+                    "metrics_found": result.totals.get("metrics_found"),
+                    "extractions": result.totals.get("extractions_total"),
+                    "totals": result.totals,
+                }
+            except PdfTooLargeError as e:
+                emit(f"[company] SKIPPED {pdf.name}: {e}")
+                outcome = {"company": company_name, "pdf": pdf.name,
+                           "fy_year": doc.fy_year, "status": "skipped_too_large",
+                           "error": str(e)}
+            except Exception as e:  # noqa: BLE001
+                emit(f"[company] FAILED {pdf.name}: {type(e).__name__}: {e}")
+                outcome = {"company": company_name, "pdf": pdf.name,
+                           "fy_year": doc.fy_year, "status": "error",
+                           "error": f"{type(e).__name__}: {e}"}
+
+        outcome["elapsed_s"] = round(time.time() - t_pdf, 1)
+        outcomes.append(outcome)
+        if on_pdf_done is not None:
+            on_pdf_done(outcome)
+        else:
+            print(f"  [{company_name} / {outcome['fy_year']}] "
+                  f"{outcome['status']} in {_fmt_duration(outcome['elapsed_s'])}")
 
     ok = [o for o in outcomes if o["status"] == "ok"]
+    skipped = [o for o in outcomes if o["status"] == "skipped_exists"]
+    failed = [o for o in outcomes if o["status"] not in ("ok", "skipped_exists")]
     roll_up = {
         "tokens_in_extraction": sum(o.get("totals", {}).get("tokens_in_extraction", 0) for o in ok),
         "tokens_out_extraction": sum(o.get("totals", {}).get("tokens_out_extraction", 0) for o in ok),
@@ -809,7 +884,8 @@ async def run_extraction_company(
 
     emit("#" * 70)
     emit(f"COMPANY DONE: {company_name}  |  ok={len(ok)}  "
-         f"failed={len(outcomes) - len(ok)}  |  {time.time() - t_company:.1f}s")
+         f"skipped={len(skipped)}  failed={len(failed)}  |  "
+         f"{time.time() - t_company:.1f}s")
     emit("#" * 70)
 
     return {
@@ -817,7 +893,8 @@ async def run_extraction_company(
         "company_dir": str(company_dir),
         "pdfs": outcomes,
         "succeeded": len(ok),
-        "failed": len(outcomes) - len(ok),
+        "skipped": len(skipped),
+        "failed": len(failed),
         "totals": roll_up,
     }
 
@@ -826,9 +903,122 @@ async def run_extraction_company(
 
 
 
-# funtion to pdfs_directory
-# extract the information of each company available in and pdfs along with the path => arr[comp] -> if done store the execel path
-# for comp in arr[comp]: run_extraction_comapny() -> once done, merge all the excel in the mega sheet
+# ---------------------------------------------------------------------------
+# Directory-level driver — every company under one root
+# ---------------------------------------------------------------------------
+
+async def run_extraction_directory(
+    pdfs_root: Path | str,
+    *,
+    model: str = DEFAULT_MODEL,
+    do_verify: bool = False,
+    concurrency: int = 4,
+    cache_ttl_seconds: int = 7200,
+    max_input_tokens: int | None = None,
+    force: bool = False,
+    quiet: bool = True,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict:
+    """Run the company pipeline over every company sub-folder under `pdfs_root`.
+
+    Layout:
+        <pdfs_root>/
+            <Company A>/  13.pdf 14.pdf …      ← one folder per company
+            <Company B>/  10.pdf 11.pdf …
+            …
+
+    Companies are processed SEQUENTIALLY (each `run_extraction_company` is in
+    turn sequential over its PDFs, which are internally concurrent over the 37
+    metrics). Serial companies keep exactly one cache + one upload alive at a
+    time — predictable cost/throughput and no Files-API hammering on a 100+ PDF
+    run. A company that fails hard is logged and skipped; the rest still run.
+    Per-year workbooks are written inside each company folder by the callee;
+    this driver does NOT merge a mega-sheet (separate step).
+
+    `force=False` (default) resumes: PDFs whose `.xlsx` already exists are
+    skipped with no API calls, so re-running after a crash only does the
+    unfinished years. Pass `force=True` to re-extract everything.
+
+    `quiet` (default True for the scale run) suppresses the verbose per-metric
+    logs. The only terminal output is one compact line per PDF —
+    `[ 12/107] Company / FY18  ok  in 2m 21s  (avg 2m 18s)` — and a final
+    total/average-time summary. The running average is over PDFs actually
+    extracted this run (skips are excluded so they don't distort it).
+
+    Returns a summary dict: root, per-company summaries, and roll-up counts.
+    """
+    pdfs_root = Path(pdfs_root)
+    if not pdfs_root.is_dir():
+        raise NotADirectoryError(f"Not a directory: {pdfs_root}")
+
+    company_dirs = sorted(p for p in pdfs_root.iterdir() if p.is_dir())
+    total_pdfs = sum(len(list(c.glob("*.pdf"))) for c in company_dirs)
+
+    print("@" * 70)
+    print(f"DIRECTORY: {pdfs_root}  |  {len(company_dirs)} companies, "
+          f"{total_pdfs} PDFs  |  verify={do_verify}")
+    print("@" * 70)
+
+    company_summaries: list[dict] = []
+    t_root = time.time()
+    progress = {"done": 0, "ran": 0, "ran_s": 0.0}
+
+    def _on_pdf_done(outcome: dict) -> None:
+        progress["done"] += 1
+        n = progress["done"]
+        # Average only over PDFs actually extracted (skips are ~0s and would
+        # otherwise deflate the figure).
+        if outcome["status"] != "skipped_exists":
+            progress["ran"] += 1
+            progress["ran_s"] += outcome.get("elapsed_s", 0.0)
+        avg = progress["ran_s"] / progress["ran"] if progress["ran"] else 0.0
+        print(f"[{n:>3}/{total_pdfs}] {outcome['company']} / "
+              f"{outcome['fy_year']}  {outcome['status']}  "
+              f"in {_fmt_duration(outcome['elapsed_s'])}  "
+              f"(avg {_fmt_duration(avg)}, "
+              f"elapsed {_fmt_duration(time.time() - t_root)})")
+
+    for cdir in company_dirs:
+        try:
+            summary = await run_extraction_company(
+                cdir, model=model, do_verify=do_verify, concurrency=concurrency,
+                cache_ttl_seconds=cache_ttl_seconds,
+                max_input_tokens=max_input_tokens, force=force, quiet=quiet,
+                on_pdf_done=_on_pdf_done, progress_callback=progress_callback,
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[directory] FAILED company {cdir.name}: {type(e).__name__}: {e}")
+            summary = {"company": cdir.name, "company_dir": str(cdir),
+                       "pdfs": [], "succeeded": 0, "skipped": 0, "failed": 0,
+                       "error": f"{type(e).__name__}: {e}", "totals": {}}
+        company_summaries.append(summary)
+
+    total_ok = sum(s.get("succeeded", 0) for s in company_summaries)
+    total_skipped = sum(s.get("skipped", 0) for s in company_summaries)
+    total_failed = sum(s.get("failed", 0) for s in company_summaries)
+    elapsed = time.time() - t_root
+    # Average over PDFs actually extracted this run (excludes resume-skips).
+    avg_pdf = progress["ran_s"] / progress["ran"] if progress["ran"] else 0.0
+
+    print("@" * 70)
+    print(f"DIRECTORY DONE: {pdfs_root}")
+    print(f"  Companies:   {len(company_dirs)}")
+    print(f"  PDFs:        {progress['done']} seen  "
+          f"(ok={total_ok}, skipped={total_skipped}, failed={total_failed})")
+    print(f"  Total time:  {_fmt_duration(elapsed)}")
+    print(f"  Avg / PDF:   {_fmt_duration(avg_pdf)} "
+          f"(over {progress['ran']} extracted)")
+    print("@" * 70)
+
+    return {
+        "pdfs_root": str(pdfs_root),
+        "companies": company_summaries,
+        "company_count": len(company_dirs),
+        "pdfs_succeeded": total_ok,
+        "pdfs_skipped": total_skipped,
+        "pdfs_failed": total_failed,
+    }
+
 
 # PLAN :
 # 1. run one comapny, to ensure the costing before going for the first scale, caching workings
@@ -840,13 +1030,16 @@ async def run_extraction_company(
 
 
 # ---------------------------------------------------------------------------
-# CLI runner — single company (Phase 1 of the PLAN above)
+# CLI runner — every company under pdfs/ (the scale run)
 # ---------------------------------------------------------------------------
 # Filenames like 13.pdf / 14.pdf need NO renaming: derive_year_from_filename
-# already maps "13" → FY13 / March 31, 2013. Just point at the company folder.
+# already maps "13" → FY13 / March 31, 2013. Per-year .xlsx files land inside
+# each company folder. To run one company instead, call run_extraction_company.
+
+
 
 # if __name__ == "__main__":
-#     COMPANY_DIR = "pdfs/3M India Ltd"
+#     COMPANY_DIR = "pdfs/Jindal Saw Ltd"
 
 #     summary = asyncio.run(
 #         run_extraction_company(
@@ -869,5 +1062,35 @@ async def run_extraction_company(
 #             line += f"  {o.get('error', '')}"
 #         print(line)
 #     print("=" * 70)
+
+
+
+
+
+if __name__ == "__main__":
+    PDFS_ROOT = "pdfs"
+
+    summary = asyncio.run(
+        run_extraction_directory(
+            PDFS_ROOT,
+            model=DEFAULT_MODEL,
+            do_verify=True,
+            concurrency=10,
+            cache_ttl_seconds=7200,
+            force=False,   # resume: skip PDFs that already have an .xlsx
+        )
+    )
+
+    print("\n" + "=" * 70)
+    print(f"SCALE SUMMARY — {summary['pdfs_root']}: "
+          f"{summary['company_count']} companies | "
+          f"{summary['pdfs_succeeded']} ok / {summary['pdfs_skipped']} skipped / "
+          f"{summary['pdfs_failed']} failed")
+    for s in summary["companies"]:
+        flag = f"  ERROR: {s['error']}" if s.get("error") else ""
+        print(f"  {s['company']:<38} ok={s.get('succeeded', 0):<3} "
+              f"skipped={s.get('skipped', 0):<3} "
+              f"failed={s.get('failed', 0):<3}{flag}")
+    print("=" * 70)
 
 

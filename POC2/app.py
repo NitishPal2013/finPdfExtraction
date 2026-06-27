@@ -857,6 +857,13 @@ for target, rows in by_target.items():
                 badge = "✓ verified" if verified else "⚠ correction suggested"
                 cols2[2].markdown(f"**Audit:** {badge}")
 
+            table_sec = m.get("table_or_section") or ""
+            def_quote = m.get("company_definition_quote") or ""
+            if table_sec:
+                st.markdown(f"**Table / Section:** {table_sec}")
+            if def_quote:
+                st.markdown(f"**Company definition:** {def_quote}")
+
             verbatim = m.get("verbatim_source_text") or ""
             if verbatim:
                 st.markdown("**Verbatim source text:**")
