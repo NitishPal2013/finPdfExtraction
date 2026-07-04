@@ -391,10 +391,10 @@ async def _call_with_retry(
     config: types.GenerateContentConfig,
     parse_fn: Callable[[Any], Any],
     emit: Callable[[str], None],
-) -> tuple[Any, dict, int]:
+) -> tuple[Any, dict, int, str]:
     """Single Gemini call wrapped in the infinite-retry policy.
 
-    Returns (parsed, usage, attempts).
+    Returns (parsed, usage, attempts, raw_text).
     Raises NonRetryablePOC2Failure on permanent failure.
     """
     attempt = 0
@@ -405,6 +405,7 @@ async def _call_with_retry(
             response = await client.models.generate_content(
                 model=model, contents=contents, config=config,
             )
+            raw_text = getattr(response, "text", None) or ""
             parsed = parse_fn(response)
             if isinstance(parsed, tuple):
                 rows, usage = parsed
@@ -418,7 +419,7 @@ async def _call_with_retry(
                     "total_tokens": getattr(meta, "total_token_count", 0) or 0,
                     "cached_tokens": getattr(meta, "cached_content_token_count", 0) or 0,
                 }
-            return rows, usage, attempt
+            return rows, usage, attempt, raw_text
         except Exception as e:  # noqa: BLE001
             elapsed = time.time() - t0
             err_type = type(e).__name__
@@ -451,7 +452,7 @@ async def _extract_one_metric(
         cached_content=cache_name,
         response_mime_type="application/json",
         response_schema=Prompt2Response.model_json_schema(),
-        temperature=0.0,
+        temperature=1.0,
         # thinking_config removed for compatibility with current google-genai SDK + flash-lite
         top_k=1,
         seed=42,
@@ -461,11 +462,13 @@ async def _extract_one_metric(
         t0 = time.time()
         emit(f"[{label}] starting (model={model})")
         try:
-            rows, usage, attempts = await _call_with_retry(
+            rows, usage, attempts, raw_text = await _call_with_retry(
                 label=label, client=client, model=model,
                 contents=prompt, config=config, parse_fn=_parse_response,
                 emit=emit,
             )
+            if raw_text:
+                emit(f"[{label}] RAW MODEL RESPONSE (full):\n{raw_text}\n--- END RAW ---")
         except NonRetryablePOC2Failure:
             return {
                 "metric": metric["name"], "status": "error",
@@ -516,18 +519,20 @@ async def _verify_one(
         cached_content=cache_name,
         response_mime_type="application/json",
         response_schema=VerificationResponse.model_json_schema(),
-        temperature=0.0,
+        temperature=1.0,
         top_k=1,
         seed=42,
     )
     async with semaphore:
         t0 = time.time()
         try:
-            parsed, usage, _ = await _call_with_retry(
+            parsed, usage, _, raw_text = await _call_with_retry(
                 label=label, client=client, model=model,
                 contents=prompt, config=config, parse_fn=_parse_verification,
                 emit=emit,
             )
+            if raw_text:
+                emit(f"[{label}] RAW VERIFICATION RESPONSE (full):\n{raw_text}\n--- END RAW VERIF ---")
         except NonRetryablePOC2Failure:
             emit(f"[{label}] non-retryable failure during verification")
             return {**item, "verified": False,

@@ -157,17 +157,50 @@ def build_system_instruction(company_display: str, fy_year: str) -> str:
 
 
 def build_metric_prompt(metric: MetricDef) -> str:
-    """Per-call user turn that constrains the extractor to a single metric.
+    """Per-call user turn (human message) that forces agent-like chain-of-thought.
 
-    The cache supplies the persona + the PDF, so this stays small. Joining
-    accept/reject lists into the prompt is the only document-specific content
-    Gemini sees per call beyond the cache.
+    We put detailed agentic instructions here so the model:
+    - Detects report type first
+    - Exhaustively searches and notes ALL mentions across the entire PDF (start/middle/end)
+    - Records section + page
+    - Then selects correctly based on consolidated preference
+    This is placed in the human message after the cached PDF to re-trigger focus and memory.
+
+    The cache supplies the PDF + system persona.
     """
     intelligence_rule_addon = ""
     if any(keyword in metric['name'] for keyword in ["Adjusted", "Normalized", "Core", "Constant"]):
         intelligence_rule_addon = "\nPRIORITIZATION: Prefer management-adjusted or core versions over reported ones."
 
-    return f"""AUDIT TASK: Extract the metric '{metric['name']}'.
+    return f"""AGENTIC CHAIN-OF-THOUGHT PROCESS (FOLLOW THESE STEPS IN ORDER. DOCUMENT EVERY STEP IN YOUR forensic_reasoning_log):
+
+STEP 0 - DETECT REPORT TYPE:
+Carefully scan the whole document.
+- If ANY "Consolidated Financial Statements", "Consolidated ..." headers, Consolidated P&L/Balance Sheet/Notes, or Consolidated versions of any financial metrics appear anywhere in the PDF, then this is a CONSOLIDATED report.
+- Otherwise it is a STANDALONE report.
+Clearly state your conclusion: "This is a CONSOLIDATED report" or "This is a STANDALONE report".
+
+STEP 1 - EXHAUSTIVE SEARCH THE ENTIRE PDF:
+Search from the very beginning of the PDF, through the middle, all the way to the end.
+Look for the metric '{metric['name']}', any of its SEEK terms, component phrases from the definition below, or any related disclosure.
+Check every section: front matter, Directors/Board Report, MD&A, Financial Highlights, Consolidated/Standalone Financial Statements, all Notes, Cash Flow, Auditor's Report, appendix, etc.
+For EVERY finding (no matter how small), record:
+- Exact verbatim text
+- Location (specific section name + page number if visible)
+- Whether the mention is under a Consolidated section or a Standalone section
+
+STEP 2 - NOTE ALL FINDINGS:
+List every relevant mention you discovered with its context. Keep them in your reasoning. Do not filter yet.
+
+STEP 3 - EVALUATE AND SELECT:
+Use the METRIC DEFINITION, SEEK/DIFFERENTIATE lists, and EXPLICIT MENTION rule strictly.
+Apply CONSOLIDATED PREFERENCE based on what you detected in STEP 0:
+- If the report is CONSOLIDATED type, only return a Consolidated disclosure for this metric (if any exists after exhaustive search).
+- Only fall back to Standalone if you found ZERO Consolidated mentions for this exact metric anywhere.
+Quote the chosen one with its table/section and page_number.
+
+STEP 4 - FINAL OUTPUT DECISION:
+Only emit a row if it is explicitly mentioned with a clear label/definition + value for the target FY. Otherwise return null.
 
 METRIC DEFINITION & DISTINCTION:
 {metric['definition']}
@@ -178,39 +211,52 @@ SEMANTIC SEARCH GUIDANCE:
 
 {intelligence_rule_addon}
 CRITICAL RULE: Match must align with the DEFINITION provided above. If the document label describes a different accounting concept, return null.
-REMEMBER (from system): extract IFF explicitly mentioned by the company; follow CONSOLIDATED PREFERENCE (per-metric) and use the richer forensic STEP format with table/section + company definition quote."""
-
+REMEMBER (from system): extract IFF explicitly mentioned by the company; follow CONSOLIDATED PREFERENCE (per-metric) and use the richer forensic STEP format with table/section + company definition quote.
+In the JSON, ALWAYS populate table_or_section and page_number for any row you return."""
 
 
 def build_verification_prompt(item: dict, metric: MetricDef) -> str:
-    """False-positive audit for ONE extracted row.
+    """False-positive audit for ONE extracted row (now with explicit agentic CoT).
 
-    Confirm the finding is genuinely the target metric (by its DEFINITION) and
-    that the value is right — judged against the full section context already
-    present on the cited page.
-
-    We pass the metric's *definition*, NOT its accept/reject lists. The model
-    should reason about what the metric actually means and whether the finding
-    matches, rather than mechanically checking list membership.
+    The model must first re-locate and classify the cited extraction's section
+    before deciding verified / not. This strengthens verification and reduces
+    load by doing proper reasoning inside the same call.
     """
     target = item.get("metric_target", "")
     value = item.get("current_year_value", "")
     verbatim = item.get("verbatim_source_text", "")
     page = item.get("page_number", "?")
     definition = metric.get("definition", "(definition unavailable)")
-    return f"""AUDIT: an earlier pass extracted '{value}' for the metric '{target}' \
-from page {page}, quoting:
-'{verbatim}'
+    return f"""AGENTIC VERIFICATION CHAIN-OF-THOUGHT (FOLLOW IN ORDER):
+
+STEP A: IDENTIFY THE CITED LOCATION
+Look at the provided extraction (value='{value}', quoted from page {page}):
+- Go to (or re-read) that exact section and page.
+- Clearly identify: What is the section name? (e.g. "Consolidated Statement of Profit and Loss", "MD&A - Financial performance...", "Note 45", "Directors' Report page 21", "Auditors' Report").
+- Determine: Is this section part of Consolidated statements or Standalone statements?
+
+STEP B: DETECT OVERALL REPORT TYPE (if not already obvious)
+Scan for any Consolidated headers or Consolidated metrics anywhere in the document.
+- If Consolidated sections or Consolidated metrics exist → this is a CONSOLIDATED report.
+- Otherwise STANDALONE report.
+Record: "Report type = CONSOLIDATED" or "Report type = STANDALONE".
+
+STEP C: SCOPE CHECK
+Compare the location you identified in STEP A with the report type in STEP B:
+- If the report is CONSOLIDATED but the extraction came from a Standalone section → this is wrong scope. Return verified=false.
+- If the report is STANDALONE and the extraction is from Standalone → OK on scope.
+- If the report is CONSOLIDATED and the extraction is from Consolidated → OK on scope.
+
+STEP D: METRIC VALIDITY CHECK
+- Is the quoted line genuinely '{target}' as defined below (for EBITDA/EBIT confirm component match: Profit before Dep/Int/Tax/Amort or direct label)?
+- Was the value explicitly presented by the company for the target FY (no derivation)?
+- Does the value match what the document states exactly?
+- Was the correct scope chosen per the rules above?
 
 WHAT '{target}' MEANS:
 {definition}
 
-Go to that page and read the surrounding context (including table header and any nearby company definition), then decide:
-- Is the quoted line genuinely '{target}' as defined above (for EBITDA/EBIT also confirm it aligns with the 'Profit before Dep/Int/Tax/Amort' component structure or direct label) — and not a similar-looking but different metric?
-- Was the value explicitly presented by the company for the target FY (not derived)?
-- Does the value match what the document states?
-- If a Consolidated version of this metric exists in the document, was the Consolidated one chosen?
-
-Return verified: true if the finding is correct. If it is the wrong metric, wrong entity scope, or the value is wrong, return verified: false and explain why in one sentence.
+Return verified: true ONLY if ALL of the above pass (correct metric, explicit, correct value, correct scope for the report type).
+If anything fails, return verified: false and explain the exact failure in one sentence.
 
 Return JSON: {{"verified": true|false, "reason": "<one sentence>"}}"""
