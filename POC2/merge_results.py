@@ -199,8 +199,9 @@ def merge_results(pdfs_root: Path, out_path: Path) -> None:
         mega_df.to_excel(writer, sheet_name="MEGA", index=False)
         used = {"mega"}
         for company, table in per_company.items():
-            table.to_excel(writer, sheet_name=_safe_sheet_name(company, used),
-                           index=False)
+            table_t = table.set_index("Year").T.reset_index().rename(columns={"index": "Metric"})
+            table_t.to_excel(writer, sheet_name=_safe_sheet_name(company, used),
+                             index=False)
         _colourise(writer)
 
     print(f"\nWrote {out_path}")

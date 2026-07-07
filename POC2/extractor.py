@@ -452,9 +452,7 @@ async def _extract_one_metric(
         cached_content=cache_name,
         response_mime_type="application/json",
         response_schema=Prompt2Response.model_json_schema(),
-        temperature=1.0,
-        # thinking_config removed for compatibility with current google-genai SDK + flash-lite
-        top_k=1,
+        temperature=0.0,
         seed=42,
     )
 
@@ -519,8 +517,7 @@ async def _verify_one(
         cached_content=cache_name,
         response_mime_type="application/json",
         response_schema=VerificationResponse.model_json_schema(),
-        temperature=1.0,
-        top_k=1,
+        temperature=0.0,
         seed=42,
     )
     async with semaphore:

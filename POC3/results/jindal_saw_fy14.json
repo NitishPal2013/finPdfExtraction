@@ -1,0 +1,38 @@
+[
+  {
+    "metric_target": "EBITDA",
+    "verbatim_source_text": "703.65",
+    "current_year_value": "703.65",
+    "entity_context": "Standalone",
+    "declared_unit": "` in crores",
+    "source_type": "AUDITED_TABLE",
+    "printed_page_number": "17",
+    "page_number": 19,
+    "is_standalone_fallback_active": "true",
+    "forensic_reasoning_log": "Extracted 'Profit before Finance Costs, Depreciation and Exceptional Items' as EBITDA from the Standalone financial results table for FY14. Consolidated financials were not provided in the document snippet, hence fallback to Standalone."
+  },
+  {
+    "metric_target": "EBITDA",
+    "verbatim_source_text": "703.65",
+    "current_year_value": "703.65",
+    "entity_context": "Standalone",
+    "declared_unit": "` in Crores",
+    "source_type": "AUDITED_TABLE",
+    "printed_page_number": "24",
+    "page_number": 26,
+    "is_standalone_fallback_active": "false",
+    "forensic_reasoning_log": "Extracted 'Profit before Interest, Depreciation & Exceptional items' as EBITDA for the year ended March 31, 2014, from the financial performance table. This is a direct verbatim match for EBITDA."
+  },
+  {
+    "metric_target": "Cash Loss Incurrence Status",
+    "verbatim_source_text": "NOT_INCURRED",
+    "current_year_value": "NOT_INCURRED",
+    "entity_context": "Standalone",
+    "declared_unit": "Unstated",
+    "source_type": "AUDITED_TABLE",
+    "printed_page_number": "41",
+    "page_number": 41,
+    "is_standalone_fallback_active": "false",
+    "forensic_reasoning_log": "Auditor explicitly states under point 10 of the Annexure to Independent Auditors\u2019 Report that 'The Company has not incurred any cash losses during the financial year covered by our audit'. Mapped to hardcoded status value 'NOT_INCURRED'."
+  }
+]

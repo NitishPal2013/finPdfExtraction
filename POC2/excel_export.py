@@ -75,6 +75,11 @@ _EXTRACTION_COLS: list[str] = [
     "entity_context",
     "source_type",
     "page_number",
+    "printed_page_number",
+    "page_verbatim_proof_above",
+    "page_verbatim_proof_below",
+    "absolute_page_confirmation",
+    "is_standalone_fallback_active",
     "table_or_section",
     "company_definition_quote",
     "verbatim_source_text",
@@ -90,7 +95,8 @@ def _write_extractions(ws: Worksheet, rows: Iterable[dict]) -> None:
         for c_idx, key in enumerate(_EXTRACTION_COLS, start=1):
             cell = ws.cell(row=r_idx, column=c_idx, value=_stringify(row.get(key)))
             if key in ("verbatim_source_text", "forensic_reasoning_log",
-                       "verification_note", "table_or_section", "company_definition_quote"):
+                       "verification_note", "table_or_section", "company_definition_quote",
+                       "page_verbatim_proof_above", "page_verbatim_proof_below"):
                 cell.alignment = _WRAP
     _autosize(ws)
 

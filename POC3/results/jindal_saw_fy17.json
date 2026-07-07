@@ -1,0 +1,86 @@
+[
+  {
+    "metric_target": "EBITDA",
+    "verbatim_source_text": "1,12,120.09",
+    "current_year_value": "1,12,120.09",
+    "entity_context": "Consolidated",
+    "declared_unit": "` lakhs",
+    "source_type": "AUDITED_TABLE",
+    "printed_page_number": "19",
+    "page_number": 22,
+    "is_standalone_fallback_active": "false",
+    "forensic_reasoning_log": "Extracted 'Profit before finance cost, depreciation, exceptional items and tax' as EBITDA from the financial results table for FY17. Assumed Consolidated based on general report structure and explicit mention of consolidated statements in section 9."
+  },
+  {
+    "metric_target": "EBITDA",
+    "verbatim_source_text": "1,12,120",
+    "current_year_value": "1,12,120",
+    "entity_context": "Consolidated",
+    "declared_unit": "lakhs",
+    "source_type": "AUDITED_TABLE",
+    "printed_page_number": "52",
+    "page_number": 56,
+    "is_standalone_fallback_active": "false",
+    "forensic_reasoning_log": "Extracted 'Profit before finance cost, depreciation, exceptional items and tax' from the financial performance table for FY 2016-17. The narrative on page 53 explicitly refers to this line item as having 'higher EBIDTA margin', confirming it as EBITDA. Assumed Consolidated based on the general context of the Management Discussion and Analysis Report and the preference for consolidated figures."
+  },
+  {
+    "metric_target": "EBITDA",
+    "verbatim_source_text": "86,202.60",
+    "current_year_value": "86,202.60",
+    "entity_context": "Consolidated",
+    "declared_unit": "lakhs",
+    "source_type": "AUDITED_TABLE",
+    "printed_page_number": "143",
+    "page_number": 147,
+    "is_standalone_fallback_active": "false",
+    "forensic_reasoning_log": "Extracted 'Operating profit before working capital changes' as EBITDA from the Consolidated Statement of Cash Flows, which is a common proxy for EBITDA in cash flow statements for the target period March 31, 2017."
+  },
+  {
+    "metric_target": "Net Debt",
+    "verbatim_source_text": "4,11,175.13",
+    "current_year_value": "4,11,175.13",
+    "entity_context": "Consolidated",
+    "declared_unit": "lakhs",
+    "source_type": "NARRATIVE",
+    "printed_page_number": "56",
+    "page_number": 60,
+    "is_standalone_fallback_active": "false",
+    "forensic_reasoning_log": "Extracted 'adjusted net debt' from the narrative on page 56 for March 31, 2017, which is explicitly calculated by considering cash. The MD&A on page 52 mentions 'consolidated debt level', supporting the assumption of a Consolidated context for this figure."
+  },
+  {
+    "metric_target": "Net Debt",
+    "verbatim_source_text": "6,12,462.78",
+    "current_year_value": "6,12,462.78",
+    "entity_context": "Consolidated",
+    "declared_unit": "lakhs",
+    "source_type": "AUDITED_TABLE",
+    "printed_page_number": "177",
+    "page_number": 181,
+    "is_standalone_fallback_active": "false",
+    "forensic_reasoning_log": "Extracted 'Net debt' value of 6,12,462.78 for March 31, 2017 from the 'NOTES TO CONSOLIDATED FINANCIAL STATEMENTS' table on page 177. The unit is specified as '(` lakhs)'."
+  },
+  {
+    "metric_target": "Cash Loss Incurrence Status",
+    "verbatim_source_text": "NOT_INCURRED",
+    "current_year_value": "NOT_INCURRED",
+    "entity_context": "Standalone",
+    "declared_unit": "Unstated",
+    "source_type": "AUDITED_TABLE",
+    "printed_page_number": "70",
+    "page_number": 73,
+    "is_standalone_fallback_active": "false",
+    "forensic_reasoning_log": "Auditor explicitly states under CARO 2020 clause that 'the Company has not incurred cash losses during the financial year covered by our audit.' Mapped to hardcoded status value 'NOT_INCURRED'."
+  },
+  {
+    "metric_target": "EBIT",
+    "verbatim_source_text": "69,186.92",
+    "current_year_value": "69,186.92",
+    "entity_context": "Standalone",
+    "declared_unit": "lakhs",
+    "source_type": "AUDITED_TABLE",
+    "printed_page_number": "107",
+    "page_number": 111,
+    "is_standalone_fallback_active": "false",
+    "forensic_reasoning_log": "Extracted 'Segment Result before interest, exceptional, extraordinary items and Taxes' which is equivalent to EBIT, from the Standalone Operating Segments table for the year ended March 31, 2017. The value is 69,186.92 lakhs."
+  }
+]

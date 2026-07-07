@@ -524,3 +524,30 @@ METRIC_METADATA: list[MetricDef] = [
 
 # Set of names for cheap membership checks downstream
 METRIC_NAMES: frozenset[str] = frozenset(m["name"] for m in METRIC_METADATA)
+
+# Define logical groups to batch queries (reduces 37 calls to 4 calls)
+METRIC_GROUPS: dict[str, list[str]] = {
+    "Group_A_Profitability_Margins": [
+        "Adjusted Revenue", "Adjusted Earnings", "Normalized Earnings", "Core Earnings", 
+        "Recurring Earnings", "Adjusted EPS", "Normalized EPS", "EBIT", "EBITDA", 
+        "Adjusted EBIT", "Adjusted EBITDA", "Core Operating Profit", "EBIT Margin", 
+        "EBITDA Margin", "Base Business Margin", "Adjusted ROE", "Adjusted ROA"
+    ],
+    "Group_B_Cash_Flow_Debt": [
+        "Free Cash Flow (FCF)", "Funds From Operations (FFO)", "Distributable Cash Flow", 
+        "Net Debt", "Net Surplus Cash", "Cash Earnings", "Cash Loss", "Cash Loss Incurrence Status"
+    ],
+    "Group_C_Currency_GAAP": [
+        "Constant Currency Revenue", "Constant Currency Revenue Growth", "Constant Currency Opex", 
+        "GAAP One-time Adjustment", "GAAP Adjusted"
+    ],
+    "Group_D_Sector_Specific": [
+        "ARPU", "Collections", "Pre-sales", "Bookings", "PPOP", "Credit Cost ex one-off", "EVA"
+    ]
+}
+
+# Verify that every metric in METRIC_METADATA belongs to exactly one group
+_all_grouped = [name for group_list in METRIC_GROUPS.values() for name in group_list]
+assert len(_all_grouped) == 37, f"Expected 37 metrics in groups, got {len(_all_grouped)}"
+assert set(_all_grouped) == METRIC_NAMES, f"Grouped metrics do not match METRIC_NAMES: {set(_all_grouped) ^ METRIC_NAMES}"
+

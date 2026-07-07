@@ -100,7 +100,27 @@ class ExtractedMetricPOC2(BaseModel):
     )
     page_number: Optional[int] = Field(
         default=None,
-        description="Absolute document page number where this was found.",
+        description="Absolute 1-indexed PDF document page number (index in the PDF reader) where this was found.",
+    )
+    printed_page_number: Optional[str] = Field(
+        default=None,
+        description="The physical page number printed on the sheet itself (e.g. '81', 'xiv', 'Page 12 of 100').",
+    )
+    page_verbatim_proof_above: Optional[str] = Field(
+        default=None,
+        description="Verbatim text of the row/line immediately preceding the extracted row. Acts as visual proof of context.",
+    )
+    page_verbatim_proof_below: Optional[str] = Field(
+        default=None,
+        description="Verbatim text of the row/line immediately following the extracted row. Acts as visual proof of context.",
+    )
+    absolute_page_confirmation: Optional[bool] = Field(
+        default=None,
+        description="True if the model explicitly verified that the verbatim text and value are physically printed on this absolute page_number.",
+    )
+    is_standalone_fallback_active: Optional[bool] = Field(
+        default=None,
+        description="True if we fell back to Standalone because Consolidated was absent for this metric.",
     )
     table_or_section: Optional[str] = Field(
         default=None,
