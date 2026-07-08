@@ -46,6 +46,11 @@ METRIC_METADATA: list[MetricDef] = [
             "- BASIS: Adjusted/Normalized/Pro-forma/Core/Non-GAAP — the printed label MUST carry one of these qualifiers attached to Revenue. Look for explicit 'Adjusted Revenue' table or reconciliation.\n"
             "- NEVER MAP TO THIS BUCKET: plain 'Revenue' / 'Total Revenue' / 'Reported Revenue' / 'Net Revenue' / 'Revenue from Operations' (those are statutory unadjusted figures with no dedicated bucket — return null per the QUALIFIERS rule); 'Constant Currency Revenue' (FX-neutral, separate bucket); any percentage revenue growth rate."
         ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP VERIFICATION:\n"
+            "1. STEP 1 (EVIDENCE OF ADJUSTMENT): You are evaluating Adjusted Revenue. The candidate MUST explicitly adjust statutory revenue for unusual, one-time, non-recurring, or discontinued operations.\n"
+            "2. STEP 2 (REJECTION OF STATUTORY REVENUE): Do NOT grab statutory unadjusted Revenue from Operations or Total Revenue!"
+        ),
     },
     {
         "name": "Adjusted Earnings",
@@ -58,6 +63,11 @@ METRIC_METADATA: list[MetricDef] = [
             "- VALUE TYPE: Absolute Currency (a total Rs/USD bottom-line figure — NEVER per-share, NEVER a percentage).\n"
             "- BASIS: Adjusted — the printed label MUST carry the qualifier 'Adjusted' or 'Underlying' attached to PAT / Earnings / Net Profit / Net Income. Look for explicit presentation in highlights or reconciliations.\n"
             "- NEVER MAP TO THIS BUCKET: Reported PAT / Net Profit / Net Income / Basic Profit (statutory, never adjusted); 'Normalized X' (→ Normalized Earnings), 'Core X' (→ Core Earnings), 'Recurring X' (→ Recurring Earnings) — route by the literal qualifier word on the page; Adjusted EPS (per-share, separate bucket); Adjusted EBIT / Adjusted EBITDA (operating-level, separate buckets)."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP VERIFICATION:\n"
+            "1. STEP 1 (EVIDENCE OF ADJUSTMENT): You are evaluating Adjusted Earnings (PAT / Net Income adjusted for one-time, non-recurring, or exceptional items). The candidate MUST explicitly show adjustments.\n"
+            "2. STEP 2 (REJECTION OF STATUTORY PAT): Do NOT grab statutory unadjusted Net Profit or Reported PAT!"
         ),
     },
     {
@@ -111,6 +121,11 @@ METRIC_METADATA: list[MetricDef] = [
             "- BASIS: Adjusted — the printed label MUST literally contain 'Adjusted' or 'Underlying' attached to EPS / Earnings Per Share.\n"
             "- NEVER MAP TO THIS BUCKET: Basic EPS / Diluted EPS / Reported EPS (statutory, never adjusted); Normalized EPS (→ Normalized EPS — separate bucket); Cash EPS; Adjusted Earnings / Adjusted PAT / Adjusted Net Income (those are the absolute total currency figures, NOT per-share)."
         ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP VERIFICATION:\n"
+            "1. STEP 1 (PER-SHARE VALUE CHECK): Confirm that the candidate is a per-share figure (e.g. Rs. 15.40 per share), NEVER a total currency aggregate in Crores/Millions!\n"
+            "2. STEP 2 (ADJUSTMENT PROOF): Confirm that the figure explicitly adjusts statutory Basic or Diluted EPS for unusual, non-recurring, or exceptional items. Do NOT grab statutory Basic/Diluted EPS if it has not been adjusted!"
+        ),
     },
     {
         "name": "Normalized EPS",
@@ -124,6 +139,11 @@ METRIC_METADATA: list[MetricDef] = [
             "- BASIS: Normalized — the printed label MUST literally contain 'Normalized' attached to EPS / Earnings Per Share.\n"
             "- NEVER MAP TO THIS BUCKET: Adjusted EPS / Basic EPS / Diluted EPS / Reported EPS (each its own bucket — match the literal qualifier); Normalized Earnings (absolute total, not per-share)."
         ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP VERIFICATION:\n"
+            "1. STEP 1 (PER-SHARE VALUE CHECK): Must be a per-share currency value, never a total company earnings figure.\n"
+            "2. STEP 2 (NORMALIZATION PROOF): Must explicitly carry the 'Normalized' label or represent EPS derived from normalized earnings."
+        ),
     },
     {
         "name": "GAAP One-time Adjustment",
@@ -136,6 +156,10 @@ METRIC_METADATA: list[MetricDef] = [
             "- VALUE TYPE: Absolute Currency adjustment amount with an explicit numeric value (NEVER a narrative-only description).\n"
             "- BASIS: A single named GAAP reconciliation item — one-time / exceptional in nature.\n"
             "- NEVER MAP TO THIS BUCKET: generic 'exceptional items' without a GAAP-anchor label; full Adjusted Earnings / Adjusted EBITDA aggregates; ongoing recurring adjustments; the GAAP Adjusted post-reconciliation total (→ GAAP Adjusted)."
+        ),
+        "layer2_rules": (
+            "EVIDENCE OF ADJUSTMENT REQUIREMENT: You are evaluating GAAP One-time Adjustment. The candidate MUST explicitly represent an exceptional, extraordinary, or non-recurring adjustment (e.g., foreign exchange losses, impairment, vessel sales, restructuring). If both Exceptional Items and Extraordinary Items are disclosed on the face of the P&L or in notes, evaluate which is the primary statutory one-time adjustment or if Note disclosures explain their nature.\n"
+            "PROOF OF EXCLUSIONS: Do not select regular recurring operating expenses or statutory depreciation."
         ),
     },
     {
@@ -155,54 +179,82 @@ METRIC_METADATA: list[MetricDef] = [
         "name": "EBIT",
         "type": "Currency",
         "accept": ["EBIT", "PBIT", "Operating Profit"],
-        "reject": ["EBITDA", "PBITDA", "PBT", "Profit before tax", "Segment Result", "Adjusted EBIT", "Normalized EBIT", "Underlying EBIT", "EBIT before exceptional items", "EBIT Margin", "Operating Profit Margin"],
+        "reject": ["EBITDA", "PBITDA", "PBT", "Profit before tax", "Segment Result", "Adjusted EBIT", "Normalized EBIT", "Underlying EBIT", "EBIT before exceptional items", "EBIT Margin", "Operating Profit Margin", "before Depreciation", "Profit before Interest, Depreciation", "Profit before Finance Costs, Depreciation", "before tax", "Profit/(Loss) before exceptional and extraordinary items and tax"],
         "definition": (
-            "Earnings Before Interest and Taxes. Measures a company's operational profitability before capital structure costs and taxation.\n"
+            "Earnings Before Interest and Taxes (Operating Profit). Measures operational profitability after deducting operating expenses and Depreciation & Amortization, but before capital structure costs and taxation.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (NEVER a percentage).\n"
             "- BASIS: Reported/Statutory — the raw EBIT figure. The printed label MUST NOT carry qualifiers ('Adjusted' / 'Normalized' / 'Underlying' / 'Pro-forma').\n"
             "- LABEL / COMPONENT REQUIREMENT: The value must correspond to earnings AFTER Depreciation & Amortization are subtracted, but BEFORE Interest and Taxes are subtracted. If Depreciation/Amortization has not yet been subtracted (e.g. EBITDA), it is NOT EBIT and must be rejected.\n"
             "- NEVER MAP TO THIS BUCKET: EBITDA (the 'D' and 'A' matter — do NOT cross-map; Depreciation & Amortization MUST be subtracted to get EBIT); Adjusted/Normalized/Underlying EBIT (→ Adjusted EBIT); EBIT Margin (percentage, separate bucket); PBT / Profit before tax (different point in the P&L); Segment Result (segment-level, out of scope per the SEGMENT-QUALIFIED LABELS rule)."
         ),
+        "layer2_rules": (
+            "MANDATORY 3-STEP ACCOUNTING DECOMPOSITION & VERIFICATION:\n"
+            "1. STEP 1 (🚨 DEPRECIATION EXCLUSION CHECK - CRITICAL): Did the company subtract Depreciation and Amortization? Look at the label carefully! If the label literally says 'before Depreciation' or 'before... Depreciation' (such as 'Profit before Interest, Depreciation' or 'Profit before Finance Costs, Depreciation'), STOP IMMEDIATELY! That is EBITDA, NOT EBIT! In EBIT, Depreciation MUST ALREADY BE SUBTRACTED!\n"
+            "2. STEP 2 (🚨 INTEREST & TAX CHECK - CRITICAL): Confirm that Interest (Finance Costs) has NOT been subtracted! If the label says 'before tax' or 'Profit before tax' (such as 'Profit/(Loss) before exceptional and extraordinary items and tax'), Interest has ALREADY been subtracted! That represents PBT/EBT, NOT EBIT! You MUST STRICTLY REJECT IT!\n"
+            "3. STEP 3 (ENTITY SCOPE CHECK): Ensure this represents whole-company operating earnings and NOT a segment profit result from Note on Segment Reporting (Note 38/54)!"
+        ),
     },
     {
         "name": "EBITDA",
         "type": "Currency",
-        "accept": ["EBITDA", "PBITDA", "Operating EBITDA"],
+        "accept": ["EBITDA", "PBITDA", "Operating EBITDA", "Profit before Interest, Depreciation and Exceptional Items", "Profit before Finance Costs, Depreciation and Exceptional Items", "Profit before Depreciation, Interest and Tax"],
         "reject": ["EBIT", "PBIT", "Cash Profit", "PAT", "Adjusted EBITDA", "Normalized EBITDA", "Pro-forma EBITDA", "Underlying EBITDA", "EBITDA Margin", "Segment EBITDA", "Segment Result"],
         "definition": (
             "Earnings Before Interest, Taxes, Depreciation, and Amortization. A proxy for operational cash flow before capital reinvestment.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (NEVER a percentage).\n"
             "- BASIS: Reported/Statutory — the raw EBITDA figure. The printed label MUST NOT carry an 'Adjusted' / 'Normalized' / 'Pro-forma' / 'Underlying' qualifier (those route to Adjusted EBITDA).\n"
-            "- LABEL / COMPONENT REQUIREMENT: Prefer direct labels ('EBITDA', 'PBITDA', 'Operating EBITDA') OR labels that represent 'Profit before Depreciation, Interest and Tax (and Amortization)'. The value must correspond to earnings with D+A (and usually I+T) not yet subtracted.\n"
-            "- NEVER MAP TO THIS BUCKET: EBIT (Depreciation & Amortization are NOT subtracted in EBITDA — letters matter); Adjusted/Normalized/Pro-forma EBITDA (→ Adjusted EBITDA); EBITDA Margin (percentage, separate bucket); Cash Profit / PAT (different metrics entirely); segment-level or business-line EBITDA; Segment Result (Segment Result is calculated after subtracting Depreciation & Amortization, making it equivalent to segment EBIT; therefore, unadjusted Segment Result is NOT EBITDA and must be rejected)."
+            "- LABEL / COMPONENT REQUIREMENT: Prefer direct labels ('EBITDA', 'PBITDA', 'Operating EBITDA') OR descriptive statutory tables ('Profit before Depreciation, Interest and Tax' / 'Profit before Finance Costs, Depreciation and Exceptional Items'). The value must correspond to earnings with D+A (and I+T) not yet subtracted.\n"
+            "- NEVER MAP TO THIS BUCKET: EBIT (Depreciation & Amortization are NOT subtracted in EBITDA — letters matter); Adjusted/Normalized/Pro-forma EBITDA (→ Adjusted EBITDA); EBITDA Margin (percentage, separate bucket); Cash Profit / PAT; segment-level EBITDA; Segment Result."
+        ),
+        "layer2_rules": (
+            "MANDATORY 4-STEP ACCOUNTING DECOMPOSITION & VERIFICATION:\n"
+            "Do not just look at face-value acronyms! You MUST evaluate the candidate by checking these 4 accounting components step-by-step:\n"
+            "1. STEP 1 (TAX EXCLUSION CHECK): Is this figure before Income Tax (PBT)? It MUST be before tax!\n"
+            "2. STEP 2 (INTEREST EXCLUSION CHECK): Have financing costs / interest expenses been excluded or added back? (Look for phrases like 'before Interest' or 'before Finance Costs').\n"
+            "3. STEP 3 (DEPRECIATION & AMORTIZATION CHECK): Does the company own depreciable physical assets? Have Depreciation and Amortization been explicitly excluded or added back? (Look for 'before Depreciation' or 'before D&A').\n"
+            "4. STEP 4 (PROOF OF EXCLUSIONS BAN RULE): You MUST examine table structure. If a line item is located BELOW or AFTER Depreciation/Amortization or Interest on a P&L Statement (e.g., 'Profit / (loss) before exceptional items and tax'), Depreciation and Interest have ALREADY been subtracted! That represents PBT/EBT, NOT EBITDA, and must be STRICTLY REJECTED!"
         ),
     },
     {
         "name": "Adjusted EBIT",
         "type": "Currency",
-        "accept": ["Adjusted EBIT", "Normalized EBIT", "Underlying EBIT", "EBIT before exceptional items", "Pro-forma EBIT"],
-        "reject": ["Reported EBIT", "plain EBIT", "PBIT (plain)", "EBITDA", "Adjusted EBITDA", "Adjusted EBIT Margin", "Adjusted Operating Profit Margin", "Segment EBIT"],
+        "accept": ["Adjusted EBIT", "Normalized EBIT", "Underlying EBIT", "EBIT before exceptional items", "Pro-forma EBIT", "Adjusted Operating EBIT"],
+        "reject": ["Reported EBIT", "plain EBIT", "PBIT (plain)", "EBITDA", "Adjusted EBITDA", "Adjusted EBIT Margin", "Adjusted Operating Profit Margin", "Segment EBIT", "before Depreciation", "Profit before Interest, Depreciation", "Profit before Finance Costs, Depreciation", "before tax", "Profit before tax", "PBT", "before exceptional and extraordinary items and tax", "Profit/(Loss) before exceptional and extraordinary items and tax"],
         "definition": (
             "EBIT adjusted for non-recurring operational items to show the 'clean' operating performance.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (NEVER a percentage / margin).\n"
             "- BASIS: Adjusted/Normalized — the printed label MUST literally contain 'Adjusted' / 'Normalized' / 'Underlying' / 'Pro-forma' / 'before exceptional items' alongside 'EBIT'.\n"
-            "- NEVER MAP TO THIS BUCKET: plain/Reported EBIT (→ EBIT); EBITDA / Adjusted EBITDA (the 'D' and 'A' matter); EBIT Margin or Adjusted EBIT Margin (percentages — there is no dedicated 'Adjusted EBIT Margin' bucket, so return null per the QUALIFIERS rule); segment-level EBIT."
+            "- NEVER MAP TO THIS BUCKET: plain/Reported EBIT (→ EBIT); EBITDA / Adjusted EBITDA (the 'D' and 'A' matter); EBIT Margin or Adjusted EBIT Margin; segment-level EBIT; any line item where Depreciation has NOT been subtracted."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP VERIFICATION & DEPRECIATION/INTEREST FIREWALL:\n"
+            "1. STEP 1 (🚨 DEPRECIATION EXCLUSION FIREWALL - CRITICAL): You MUST check if Depreciation has been subtracted! If the candidate label literally says 'before Depreciation' or 'before... Depreciation' (such as 'Profit before Interest, Depreciation & Exceptional Items'), Depreciation has NOT been subtracted! That represents EBITDA or Adjusted EBITDA, NEVER Adjusted EBIT! You MUST STRICTLY REJECT IT!\n"
+            "2. STEP 2 (🚨 INTEREST EXCLUSION FIREWALL - CRITICAL): You MUST check if Interest (Finance Costs) has been subtracted! If the candidate label says 'before tax' or 'Profit before tax' (such as 'Profit/(Loss) before exceptional and extraordinary items and tax'), Interest has ALREADY been subtracted! That represents PBT/EBT, NEVER EBIT or Adjusted EBIT! You MUST STRICTLY REJECT IT!\n"
+            "3. STEP 3 (EXCEPTIONAL ADJUSTMENT PROOF): You are evaluating Adjusted EBIT. The candidate MUST explicitly adjust for unusual, one-time, or exceptional items.\n"
+            "4. STEP 4 (MATHEMATICAL IDENTITY CHECK): Confirm that Adjusted EBIT is numerically lower than EBITDA by the statutory depreciation amount ($EBIT < EBITDA$). Do NOT select Consolidated PBT or EBT!"
         ),
     },
     {
         "name": "Adjusted EBITDA",
         "type": "Currency",
-        "accept": ["Adjusted EBITDA", "Normalized EBITDA", "Pro-forma EBITDA", "Underlying EBITDA", "EBITDA before exceptional items"],
+        "accept": ["Adjusted EBITDA", "Normalized EBITDA", "Pro-forma EBITDA", "Underlying EBITDA", "EBITDA before exceptional items", "Adjusted Operating EBITDA", "adjusted operating EBITDA", "Profit before Finance Costs, Depreciation and Exceptional Items", "Profit before Interest, Depreciation and Exceptional Items", "Profit before Depreciation, Interest and Tax (before exceptional items)"],
         "reject": ["Plain EBITDA", "Reported EBITDA", "PBITDA (plain)", "EBIT", "Adjusted EBIT", "Adjusted EBITDA Margin", "Normalized EBITDA Margin", "Cash Profit", "Segment EBITDA", "Segment Result"],
         "definition": (
-            "EBITDA further refined to exclude items like restructuring costs, stock-based compensation, or legal settlements.\n"
+            "EBITDA further refined to exclude items like restructuring costs, stock-based compensation, forex devaluations, or legal settlements to reflect true recurring operational cash generation.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (NEVER a percentage / margin).\n"
-            "- BASIS: Adjusted/Normalized/Pro-forma — the printed label MUST literally contain one of these qualifiers alongside 'EBITDA'.\n"
-            "- NEVER MAP TO THIS BUCKET: plain/Reported EBITDA (→ EBITDA); EBIT or Adjusted EBIT (the 'D' and 'A' matter); EBITDA Margin / Adjusted EBITDA Margin (percentages — there is no dedicated 'Adjusted EBITDA Margin' bucket, so return null per the QUALIFIERS rule); Cash Profit; segment-level EBITDA; Segment Result (Segment Result is calculated after subtracting Depreciation & Amortization; do not map unadjusted Segment Result to Adjusted EBITDA)."
+            "- BASIS: Adjusted/Normalized/Pro-forma — the printed label MUST literally contain one of these qualifiers alongside 'EBITDA' OR represent statutory profit before D&A and exceptional items.\n"
+            "- NEVER MAP TO THIS BUCKET: plain/Reported EBITDA (→ EBITDA); EBIT or Adjusted EBIT (the 'D' and 'A' matter); EBITDA Margin / Adjusted EBITDA Margin; Cash Profit; segment-level EBITDA; Segment Result."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP VERIFICATION:\n"
+            "1. STEP 1 (VERIFY BASE EBITDA COMPONENTS): First, confirm that Interest, Taxes, and Depreciation & Amortization are ALL excluded! (Must be before Interest, Tax, and Depreciation).\n"
+            "2. STEP 2 (VERIFY EXCEPTIONAL / ONE-TIME ADJUSTMENT): Check whether the figure explicitly adjusts for or excludes statutory Exceptional Items (e.g., Note 33/34 forex losses, impairment, restructuring).\n"
+            "3. STEP 3 (ACCEPT STATUTORY & DESCRIPTIVE LABELS): Accept both acronym labels ('Adjusted EBITDA', 'Adjusted Operating EBITDA', 'Normalized EBITDA') AND descriptive statutory Indian GAAP labels ('Profit before Finance Costs, Depreciation and Exceptional Items' / 'Profit before Interest, Depreciation & Exceptional Items'). Do not return 0 candidates if these phrases exist!\n"
+            "4. STEP 4 (PROOF OF EXCLUSIONS BAN RULE): Do NOT select Consolidated PBT or EBT just because it says 'before exceptional items'. The item MUST be before Depreciation and Interest!"
         ),
     },
     {
@@ -217,31 +269,48 @@ METRIC_METADATA: list[MetricDef] = [
             "- BASIS: Core — the printed label MUST literally contain 'Core Operating' or 'Underlying Operating'.\n"
             "- NEVER MAP TO THIS BUCKET: plain Operating Profit (→ EBIT); EBITDA (different aggregate); Adjusted EBIT (→ Adjusted EBIT — different qualifier); 'Core Earnings' (bottom-line, separate bucket); Segment Result (segment-level, out of scope); any percentage margin including Core Margin / Base Business Margin."
         ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP VERIFICATION:\n"
+            "1. STEP 1 (SCOPE & DEFINITION CHECK): You are evaluating Core Operating Profit (profit from primary operations only). Do not grab Segment Result or bottom-line Net Profit.\n"
+            "2. STEP 2 (VALUE TYPE): Must be an absolute currency figure at the operating level, never a percentage or margin."
+        ),
     },
     {
         "name": "EBIT Margin",
         "type": "Percentage",
         "accept": ["EBIT Margin", "EBIT Margin %", "Operating Profit Margin", "Operating Profit Margin %", "Operating Margin", "PBIT Margin"],
-        "reject": ["EBITDA Margin", "Net Profit Margin", "Gross Margin", "Adjusted EBIT Margin", "Normalized EBIT Margin", "Underlying EBIT Margin", "EBIT", "Adjusted EBIT", "Segment EBIT Margin"],
+        "reject": ["EBITDA Margin", "Net Profit Margin", "Gross Margin", "Adjusted EBIT Margin", "Normalized EBIT Margin", "Underlying EBIT Margin", "EBIT", "Adjusted EBIT", "Segment EBIT Margin", "before Depreciation"],
         "definition": (
-            "EBIT expressed as a percentage of total revenue. Measures operational efficiency.\n"
+            "EBIT expressed as a percentage of total revenue. Measures operational efficiency after asset wear-and-tear.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Percentage / Margin Ratio (always 'x.x%' alongside the word 'Margin'). NEVER an absolute currency amount.\n"
-            "- BASIS: Reported/Statutory — the raw EBIT margin. The printed label MUST NOT carry 'Adjusted' / 'Normalized' / 'Pro-forma' / 'Underlying' qualifiers. There is no 'Adjusted EBIT Margin' bucket in this dictionary, so qualifier-stripping is forbidden — return null if only the adjusted version appears.\n"
+            "- BASIS: Reported/Statutory — the raw EBIT margin. The printed label MUST NOT carry 'Adjusted' / 'Normalized' / 'Pro-forma' / 'Underlying' qualifiers.\n"
             "- NEVER MAP TO THIS BUCKET: EBITDA Margin (letter 'D' matters); Net Profit Margin / Gross Margin (different aggregates); absolute EBIT figures (→ EBIT) or Adjusted EBIT (→ Adjusted EBIT); 'Adjusted EBIT Margin' (forbidden qualifier-strip)."
+        ),
+        "layer2_rules": (
+            "MANDATORY 3-STEP ACCOUNTING DECOMPOSITION & VERIFICATION:\n"
+            "1. STEP 1 (VERBATIM & FORMULA CHECK): If a candidate is labeled 'Operating Profit Margin' or 'PBIT Margin', you MUST examine the narrative or table structure. If the text defines this margin as being BEFORE Depreciation & Amortization (i.e., EBITDA / PBITDA margin), it is NOT EBIT Margin! You MUST STRICTLY REJECT IT!\n"
+            "2. STEP 2 (MATHEMATICAL IDENTITY CHECK): In any company with Depreciation & Amortization, statutory EBIT Margin MUST be numerically lower than EBITDA Margin ($EBIT Margin < EBITDA Margin$). If the percentage is gross of depreciation, reject it.\n"
+            "3. STEP 3 (SCOPE PRUNING): Strictly reject segment-level EBIT margins (e.g., pipe segment margin) or division-specific operating margins."
         ),
     },
     {
         "name": "EBITDA Margin",
         "type": "Percentage",
-        "accept": ["EBITDA Margin", "EBITDA Margin %", "PBITDA Margin", "Operating EBITDA Margin"],
+        "accept": ["EBITDA Margin", "EBITDA Margin %", "PBITDA Margin", "Operating EBITDA Margin", "Operating Profit Margin (if before D&A)"],
         "reject": ["EBIT Margin", "Net Profit Margin", "Gross Margin", "Adjusted EBITDA Margin", "Normalized EBITDA Margin", "Pro-forma EBITDA Margin", "Underlying EBITDA Margin", "EBITDA", "Adjusted EBITDA", "Segment EBITDA Margin"],
         "definition": (
-            "EBITDA as a percentage of revenue. Used to compare profitability across companies with different capital structures.\n"
+            "EBITDA as a percentage of revenue. Used to compare operational cash generating efficiency across companies.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Percentage / Margin Ratio (always 'x.x%' alongside the word 'Margin'). NEVER an absolute currency amount.\n"
-            "- BASIS: Reported/Statutory — the raw EBITDA margin. The printed label MUST NOT carry 'Adjusted' / 'Normalized' / 'Pro-forma' / 'Underlying' qualifiers. There is no 'Adjusted EBITDA Margin' bucket in this dictionary, so qualifier-stripping is forbidden — if only the adjusted version appears on the page, return null.\n"
+            "- BASIS: Reported/Statutory — the raw EBITDA margin. The printed label MUST NOT carry 'Adjusted' / 'Normalized' / 'Pro-forma' / 'Underlying' qualifiers.\n"
             "- NEVER MAP TO THIS BUCKET: EBIT Margin ('D' and 'A' matter); Net Profit Margin / Gross Margin (different aggregates); absolute EBITDA figures (→ EBITDA) or Adjusted EBITDA (→ Adjusted EBITDA); 'Adjusted/Normalized/Pro-forma EBITDA Margin' (forbidden qualifier-strip)."
+        ),
+        "layer2_rules": (
+            "MANDATORY 3-STEP ACCOUNTING DECOMPOSITION & VERIFICATION:\n"
+            "1. STEP 1 (TERMINOLOGY & SYNONYM CHECK): In corporate MD&A narratives, management often refers to EBITDA Margin loosely as 'Operating Profit Margin' or 'PBITDA Margin'. You may accept 'Operating Profit Margin' as EBITDA Margin ONLY IF the surrounding text or table confirms it is calculated BEFORE Depreciation and Amortization!\n"
+            "2. STEP 2 (VERBATIM EXCLUSION PROOF): If the candidate represents a margin calculated AFTER subtracting Depreciation & Amortization (which is EBIT Margin), you MUST STRICTLY REJECT IT!\n"
+            "3. STEP 3 (SCOPE PRUNING): Strictly reject segment-level EBITDA margins or subsidiary-only margins."
         ),
     },
     {
@@ -255,6 +324,11 @@ METRIC_METADATA: list[MetricDef] = [
             "- VALUE TYPE: Percentage / Margin Ratio (NEVER absolute currency).\n"
             "- BASIS: Reported margin for the core/legacy business — distinct from group-level or segment margins.\n"
             "- NEVER MAP TO THIS BUCKET: Gross Margin / EBITDA Margin / EBIT Margin / Net Margin (each is its own concept); 'Core Earnings' / 'Core Operating Profit' (absolute currency, not margin); segment-level margins (out of scope per the SEGMENT-QUALIFIED LABELS rule)."
+        ),
+        "layer2_rules": (
+            "SCOPE & DEFINITION CHECK: You are evaluating Base Business Margin (the profitability margin of the core/legacy business units, excluding new acquisitions, joint ventures, or hyper-growth non-core segments).\n"
+            "1. DIFFERENTIATION: Do not simply grab group-level EBITDA Margin, EBIT Margin, or Gross Margin. The candidate MUST explicitly refer to the margin of the 'Base Business', 'Core Business', or legacy operations.\n"
+            "2. VALUE TYPE: Must be a percentage (%) margin, never an absolute currency figure."
         ),
     },
     {
@@ -320,6 +394,9 @@ METRIC_METADATA: list[MetricDef] = [
             "- VALUE TYPE: Absolute Currency.\n"
             "- BASIS: A 'distributable' / 'cash available for distribution' label tied to dividend capacity (not the dividend actually paid).\n"
             "- NEVER MAP TO THIS BUCKET: Free Cash Flow / FCF (broader, pre-distribution — separate bucket); Funds From Operations / FFO (real-estate-specific, separate); generic Cash from Operations / CFO; the dividend actually paid (output, not capacity); 'Distributable Reserves' (an equity / reserves line on the balance sheet, not a cash flow)."
+        ),
+        "layer2_rules": (
+            "ANOMALY PREVENTION RULE: In Indian GAAP / Ind AS, manufacturing companies do not report Distributable Cash Flow (an MLP/REIT metric). NEVER select 'Total amount available for appropriation' or 'Retained earnings carried forward' from the Directors' Report! If no explicit Distributable Cash Flow exists, return null / 0 candidates."
         ),
     },
     {
@@ -414,6 +491,9 @@ METRIC_METADATA: list[MetricDef] = [
             "- BASIS: Sector-specific (real estate / lending / infra) — cash inflows from customers, NOT accrual revenue and NOT CFO.\n"
             "- NEVER MAP TO THIS BUCKET: recognized Revenue (accrual basis, not cash); generic Operating Cash Flow / CFO (broader); Order Book / Backlog (a stock, not a period flow); Pre-sales / Bookings (contracted but not yet collected — separate buckets)."
         ),
+        "layer2_rules": (
+            "ANOMALY PREVENTION RULE: Do NOT grab subsidiary-specific project collections (e.g., Note 39 water project user collections) as group top-line collections. Must represent overall company customer collections."
+        ),
     },
     {
         "name": "Pre-sales",
@@ -492,6 +572,12 @@ METRIC_METADATA: list[MetricDef] = [
             "- BASIS: The specific 'Cash Earnings' / 'Cash Profit' label — distinct from cash-flow-statement aggregates.\n"
             "- NEVER MAP TO THIS BUCKET: EBITDA (similar idea but a different starting point and adjustments); Operating Cash Flow / CFO (a cash-flow-statement line); plain Net Profit / PAT (accrual); Free Cash Flow (post-CapEx); Cash Loss (the negative counterpart — separate bucket); Adjusted Earnings (different qualifier semantics)."
         ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP VERIFICATION:\n"
+            "1. STEP 1 (VERBATIM & FORMULA CHECK): You are evaluating Cash Earnings (Cash Profit / Cash PAT). This is statutorily defined as PAT + Depreciation & Amortization. Do not grab Operating Cash Flow (CFO) from the Cash Flow Statement!\n"
+            "2. STEP 2 (PRECISION CHECK): If both a rounded summary table figure and an exact unrounded narrative/table figure exist, prefer the exact unrounded figure or primary table.\n"
+            "3. STEP 3 (SCOPE PRUNING): Prefer Consolidated over Standalone for the overall company."
+        ),
     },
     {
         "name": "Cash Loss",
@@ -505,6 +591,9 @@ METRIC_METADATA: list[MetricDef] = [
             "- BASIS: A specific 'Cash Loss' label with an accompanying numeric figure.\n"
             "- NEVER MAP TO THIS BUCKET: Net Loss / Accounting Loss / Book Loss (accrual-basis, separate concept); Cash Loss Incurrence Status (→ a yes/no Boolean disclosure, separate bucket); positive Cash Earnings (the opposite sign)."
         ),
+        "layer2_rules": (
+            "VERBATIM & FORMULA CHECK: You are evaluating Cash Loss (the numeric magnitude of negative cash profit or cash operating outflow). Do not grab accrual Net Loss or Book Loss. STRICT BAN: NEVER select Operating Cash Flow (CFO / Net cash inflow/outflow from operating activities) from the Cash Flow Statement!"
+        ),
     },
     {
         "name": "Cash Loss Incurrence Status",
@@ -517,6 +606,9 @@ METRIC_METADATA: list[MetricDef] = [
             "- VALUE TYPE: Boolean (a yes/no statement — the value carries a true/false signal, NOT a number).\n"
             "- BASIS: An explicit narrative disclosure tying cash loss to the reporting period.\n"
             "- NEVER MAP TO THIS BUCKET: any numeric cash loss value (→ Cash Loss); accrual-basis Net Loss declarations; going-concern boilerplate that does not specifically address cash loss; general profitability statements."
+        ),
+        "layer2_rules": (
+            "BOOLEAN STATUS CHECK: You are evaluating whether the company incurred a cash loss. Look specifically in the Statutory Auditor's Report (e.g., under CARO requirements). If the Auditor's Report explicitly states 'The Company has not incurred any cash losses during the financial year', set final_value to 'false'. If it states cash losses were incurred, set final_value to 'true'."
         ),
     },
 ]

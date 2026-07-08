@@ -40,6 +40,7 @@ Your sole purpose in Layer 1 is to perform an **Exhaustive Candidate Search** ac
    - **Step 1:** Check the Table of Contents (TOC) if present, or scan the major section headings of the report to map out where financial performance, operational metrics, graphs, accounting policies, and statements are located.
    - **Step 2:** Systematically iterate through each relevant section one by one (e.g., Highlights & Infographics -> Directors' Report -> Management Discussion & Analysis -> Consolidated Financial Statements -> Standalone Financial Statements -> Notes to Accounts).
    - **Step 3:** For each section traversed, search for any trace or mention of the target metric or its synonyms, capturing all candidates found. Record your traversal notes in `forensic_reasoning_log`.
+8. **EXCLUSION OF OUT-OF-SCOPE SECTIONS (SEGMENT & SUBSIDIARIES):** Do not harvest candidates from Note on Segment Reporting / Segment Information (e.g. Note 38 / Note 54) or Subsidiary-only / Joint Venture project notes (e.g. Note 39) unless evaluating a sector-specific division. Segment EBIT and project collections are partial business lines and must NOT be harvested as whole-company candidates!
 7. **THE NULL DEFAULT:** If after an exhaustive search from start to finish you find zero mentions of the metric or its accepted synonyms, return an empty `candidates` list.
 
 ### JSON SCHEMA
@@ -100,6 +101,10 @@ If no candidates exist anywhere in the document, return `{{"candidates": []}}`.
 def build_finalization_prompt(metric: MetricDef, candidates: list[dict]) -> str:
     """Prompt for Layer 2 LLM finalization and verification."""
     candidates_json = json.dumps(candidates, indent=2)
+    layer2_rules = metric.get(
+        "layer2_rules",
+        "SCOPE PRUNING: Ensure candidate represents the overall company/group. Reject segment-level or subsidiary-only figures. Prefer Consolidated over Standalone.",
+    )
     return f"""AGENTIC FINALIZATION & AUDIT TASK (LAYER 2 - PRECISION SELECTION):
 
 You are an elite financial verification and finalization auditor.
@@ -111,31 +116,38 @@ METRIC DEFINITION:
 SEEK TERMS: {', '.join(metric['accept'])}
 REJECT TERMS: {', '.join(metric['reject'])}
 
+🌟 METRIC-SPECIFIC CLEARANCE & FORMULA RULES:
+{layer2_rules}
+
 HARVESTED CANDIDATES POOL:
 {candidates_json}
 
-YOUR TASK — EXECUTE THESE 3 SELECTION STEPS IN ORDER:
+YOUR TASK — EXECUTE THESE 4 SELECTION STEPS IN STRICT ORDER:
 
-STEP 1: PHYSICAL PAGE PROOF VERIFICATION (STRICT PRE-FILTER)
-Inspect each candidate's `page_verbatim_proof_above`, `page_verbatim_proof_below`, `printed_page_number`, and `verbatim_source_text`.
-- If the surrounding proof lines or verbatim text indicate a hallucination, mismatch, or page-attribution error, IMMEDIATELY REJECT the candidate!
-- Record the rejection in `rejection_audit_log`: e.g., "[REJECTED Candidate on Page X]: Failed physical page proof verification."
+STEP 1: PHYSICAL PAGE PROOF & SCOPE PRUNING (THE 'WHOLE COMPANY' RULE)
+Inspect each candidate's page proofs and table context:
+- If proof lines indicate a hallucination or mismatch, REJECT IMMEDIATELY.
+- 🚨 SCOPE PRUNING & ANOMALY PREVENTION: Our goal is to extract metrics for the OVERALL COMPANY / GROUP. You MUST IMMEDIATELY REJECT any candidate from: (a) Segment Reporting (e.g., Note on Segment Information / Note 38/54), (b) Subsidiary-only disclosures (e.g., Note 39 water project collections), or (c) Joint-Venture only tables! Furthermore, for Cash Loss, strictly ban Operating Cash Flow (CFO) from the Cash Flow Statement. For Distributable Cash Flow, ban 'available for appropriation' in Indian GAAP reports.
+- Record rejections in `rejection_audit_log`: e.g., "[REJECTED Candidate on Page X]: Rejected Segment Report / Subsidiary figure; out of scope for overall company performance."
 
-STEP 2: ENTITY SCOPE PREFERENCE (CONSOLIDATED PREFERENCE RULE)
-Look at the surviving candidates:
-- If ANY valid candidate is tagged as `entity_context: "Consolidated"`, you MUST REJECT all `Standalone` candidates! The group-level Consolidated figure always takes precedence.
-- Record the rejection in `rejection_audit_log`: e.g., "[REJECTED Candidate on Page Y]: Standalone scope rejected because Consolidated disclosure exists on Page Z."
-- Only if ZERO Consolidated candidates exist anywhere in the pool may you accept a Standalone candidate. If so, set `is_standalone_fallback_active` to true.
+STEP 2: METRIC-SPECIFIC FORMULA & EXCLUSION VERIFICATION
+For surviving whole-company candidates, enforce the METRIC-SPECIFIC CLEARANCE & FORMULA RULES above:
+- Examine the verbatim text: does it prove that required exclusions (like Depreciation, Interest, Taxes, or Exceptional Items) were actually removed?
+- If a candidate violates the ban rules (e.g. selecting PBT as EBITDA), REJECT IMMEDIATELY!
+- Record rejections: e.g., "[REJECTED Candidate on Page Y]: Violated Proof of Exclusions rule; line item is after D&A."
 
-STEP 3: SOURCE TYPE HIERARCHY & DEFINITION CLARITY
-Among the remaining valid candidates (e.g., all surviving Consolidated candidates):
-- Evaluate which candidate most clearly represents the overall company metric value per the accounting definition.
-- Apply the source type hierarchy: prefer primary **AUDITED_TABLE** (Statement of Profit and Loss, Balance Sheet, Cash Flow) or formal **FOOTNOTE** definitions over secondary presentations like **KPI_HIGHLIGHTS_BOX**, **GRAPH**, **BAR_CHART**, or **NARRATIVE_PARAGRAPH**, unless the secondary presentation explicitly provides a management-adjusted figure required by the metric definition that is not present in the audited tables.
-- Record why secondary candidates were discarded in `rejection_audit_log`: e.g., "[REJECTED Candidate on Page W]: Secondary KPI graph/chart rejected in favor of primary Audited P&L Table on Page V."
+STEP 3: ENTITY SCOPE PREFERENCE (CONSOLIDATED OVER STANDALONE)
+Look ONLY at the surviving, whole-company, formula-valid candidates from Step 2:
+- If ANY valid candidate is tagged as `entity_context: "Consolidated"`, you MUST REJECT all `Standalone` candidates! Group-level Consolidated figures take precedence.
+- Only if ZERO valid Consolidated candidates survive Steps 1 & 2 may you accept a Standalone candidate (set `is_standalone_fallback_active: true`).
+
+STEP 4: SOURCE TYPE HIERARCHY & FINAL SELECTION
+Among remaining candidates, apply hierarchy: AUDITED_TABLE > FOOTNOTE > NARRATIVE / CHARTS.
+Select the single winning candidate and output matching `FinalizedMetricPOC3` schema.
 
 OUTPUT DECISION:
 Select the single winning candidate and set `final_value` to its `current_year_value` (and populate `winning_candidate`).
-If all candidates are rejected in Steps 1-3, set `final_value: null`, `winning_candidate: null`, and explain all rejections in `rejection_audit_log`.
+If all candidates are rejected in Steps 1-4, set `final_value: null`, `winning_candidate: null`, and explain all rejections in `rejection_audit_log`.
 
 Return JSON matching the `FinalizedMetricPOC3` schema:
 ```json
@@ -153,3 +165,4 @@ Return JSON matching the `FinalizedMetricPOC3` schema:
 ```
 CRITICAL OUTPUT RULE: Return ONLY valid JSON parseable by `json.loads()`.
 """
+

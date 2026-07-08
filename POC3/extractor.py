@@ -41,7 +41,7 @@ from POC3.prompt import (
     build_system_instruction,
 )
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.1-flash-lite"
 BASE_DELAY = 2.0
 MAX_DELAY = 60.0
 

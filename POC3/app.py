@@ -56,7 +56,7 @@ with st.sidebar:
     st.header("2. Pipeline Config")
     model_choice = st.selectbox(
         "Gemini Model",
-        options=["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.1-flash"],
+        options=["gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-3.1-flash"],
         index=0,
     )
     concurrency = st.slider("Concurrency Limit", min_value=1, max_value=10, value=4)
