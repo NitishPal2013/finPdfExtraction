@@ -191,7 +191,7 @@ METRIC_METADATA: list[MetricDef] = [
         "layer2_rules": (
             "MANDATORY 3-STEP ACCOUNTING DECOMPOSITION & VERIFICATION:\n"
             "1. STEP 1 (🚨 DEPRECIATION EXCLUSION CHECK - CRITICAL): Did the company subtract Depreciation and Amortization? Look at the label carefully! If the label literally says 'before Depreciation' or 'before... Depreciation' (such as 'Profit before Interest, Depreciation' or 'Profit before Finance Costs, Depreciation'), STOP IMMEDIATELY! That is EBITDA, NOT EBIT! In EBIT, Depreciation MUST ALREADY BE SUBTRACTED!\n"
-            "2. STEP 2 (🚨 INTEREST & TAX CHECK - CRITICAL): Confirm that Interest (Finance Costs) has NOT been subtracted! If the label says 'before tax' or 'Profit before tax' (such as 'Profit/(Loss) before exceptional and extraordinary items and tax'), Interest has ALREADY been subtracted! That represents PBT/EBT, NOT EBIT! You MUST STRICTLY REJECT IT!\n"
+            "2. STEP 2 (🚨 INTEREST & TAX CHECK - CRITICAL): Confirm that Interest (Finance Costs) has NOT been subtracted! If the label says 'before tax' or 'Profit before tax' (such as 'Profit/(Loss) before exceptional items and tax' or 'Profit before tax' from an AUDITED_TABLE), Interest has ALREADY been subtracted! That represents PBT/EBT, NOT EBIT! You MUST STRICTLY REJECT IT!\n"
             "3. STEP 3 (ENTITY SCOPE CHECK): Ensure this represents whole-company operating earnings and NOT a segment profit result from Note on Segment Reporting (Note 38/54)!"
         ),
     },
@@ -214,7 +214,7 @@ METRIC_METADATA: list[MetricDef] = [
             "1. STEP 1 (TAX EXCLUSION CHECK): Is this figure before Income Tax (PBT)? It MUST be before tax!\n"
             "2. STEP 2 (INTEREST EXCLUSION CHECK): Have financing costs / interest expenses been excluded or added back? (Look for phrases like 'before Interest' or 'before Finance Costs').\n"
             "3. STEP 3 (DEPRECIATION & AMORTIZATION CHECK): Does the company own depreciable physical assets? Have Depreciation and Amortization been explicitly excluded or added back? (Look for 'before Depreciation' or 'before D&A').\n"
-            "4. STEP 4 (PROOF OF EXCLUSIONS BAN RULE): You MUST examine table structure. If a line item is located BELOW or AFTER Depreciation/Amortization or Interest on a P&L Statement (e.g., 'Profit / (loss) before exceptional items and tax'), Depreciation and Interest have ALREADY been subtracted! That represents PBT/EBT, NOT EBITDA, and must be STRICTLY REJECTED!"
+            "4. STEP 4 (PROOF OF EXCLUSIONS BAN RULE): You MUST examine table structure. If a line item is located BELOW or AFTER Depreciation/Amortization or Interest on a P&L Statement (e.g., 'Profit / (loss) before exceptional items and tax' or 'Profit before tax' from an AUDITED_TABLE), Depreciation and Interest have ALREADY been subtracted! That represents PBT/EBT, NOT EBITDA, and must be STRICTLY REJECTED!"
         ),
     },
     {
@@ -232,7 +232,7 @@ METRIC_METADATA: list[MetricDef] = [
         "layer2_rules": (
             "MANDATORY STEP-BY-STEP VERIFICATION & DEPRECIATION/INTEREST FIREWALL:\n"
             "1. STEP 1 (🚨 DEPRECIATION EXCLUSION FIREWALL - CRITICAL): You MUST check if Depreciation has been subtracted! If the candidate label literally says 'before Depreciation' or 'before... Depreciation' (such as 'Profit before Interest, Depreciation & Exceptional Items'), Depreciation has NOT been subtracted! That represents EBITDA or Adjusted EBITDA, NEVER Adjusted EBIT! You MUST STRICTLY REJECT IT!\n"
-            "2. STEP 2 (🚨 INTEREST EXCLUSION FIREWALL - CRITICAL): You MUST check if Interest (Finance Costs) has been subtracted! If the candidate label says 'before tax' or 'Profit before tax' (such as 'Profit/(Loss) before exceptional and extraordinary items and tax'), Interest has ALREADY been subtracted! That represents PBT/EBT, NEVER EBIT or Adjusted EBIT! You MUST STRICTLY REJECT IT!\n"
+            "2. STEP 2 (🚨 INTEREST EXCLUSION FIREWALL - CRITICAL): You MUST check if Interest (Finance Costs) has been subtracted! If the candidate label says 'before tax' or 'Profit before tax' (such as 'Profit/(Loss) before exceptional items and tax' or 'Profit before tax' from an AUDITED_TABLE), Interest has ALREADY been subtracted! That represents PBT/EBT, NEVER EBIT or Adjusted EBIT! You MUST STRICTLY REJECT IT!\n"
             "3. STEP 3 (EXCEPTIONAL ADJUSTMENT PROOF): You are evaluating Adjusted EBIT. The candidate MUST explicitly adjust for unusual, one-time, or exceptional items.\n"
             "4. STEP 4 (MATHEMATICAL IDENTITY CHECK): Confirm that Adjusted EBIT is numerically lower than EBITDA by the statutory depreciation amount ($EBIT < EBITDA$). Do NOT select Consolidated PBT or EBT!"
         ),
@@ -254,7 +254,7 @@ METRIC_METADATA: list[MetricDef] = [
             "1. STEP 1 (VERIFY BASE EBITDA COMPONENTS): First, confirm that Interest, Taxes, and Depreciation & Amortization are ALL excluded! (Must be before Interest, Tax, and Depreciation).\n"
             "2. STEP 2 (VERIFY EXCEPTIONAL / ONE-TIME ADJUSTMENT): Check whether the figure explicitly adjusts for or excludes statutory Exceptional Items (e.g., Note 33/34 forex losses, impairment, restructuring).\n"
             "3. STEP 3 (ACCEPT STATUTORY & DESCRIPTIVE LABELS): Accept both acronym labels ('Adjusted EBITDA', 'Adjusted Operating EBITDA', 'Normalized EBITDA') AND descriptive statutory Indian GAAP labels ('Profit before Finance Costs, Depreciation and Exceptional Items' / 'Profit before Interest, Depreciation & Exceptional Items'). Do not return 0 candidates if these phrases exist!\n"
-            "4. STEP 4 (PROOF OF EXCLUSIONS BAN RULE): Do NOT select Consolidated PBT or EBT just because it says 'before exceptional items'. The item MUST be before Depreciation and Interest!"
+            "4. STEP 4 (PROOF OF EXCLUSIONS BAN RULE): Do NOT select Consolidated PBT or EBT just because it says 'before exceptional items'. The item MUST be before Depreciation and Interest! Rejects statutory P&L lines titled 'Profit/(loss) before exceptional items and tax' or 'Profit before tax' from an AUDITED_TABLE."
         ),
     },
     {

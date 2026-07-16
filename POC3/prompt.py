@@ -34,7 +34,7 @@ Your sole purpose in Layer 1 is to perform an **Exhaustive Candidate Search** ac
    - Capture the exact verbatim printed text of the line immediately ABOVE the match (`page_verbatim_proof_above`).
    - Capture the exact verbatim printed text of the line immediately BELOW the match (`page_verbatim_proof_below`).
    - Set `absolute_page_confirmation` to true.
-4. **ENTITY CONTEXT TAGGING:** For every candidate, tag `entity_context` as `"Consolidated"`, `"Standalone"`, or `"Unclear"`.
+4. **ENTITY CONTEXT TAGGING & SCOPE CONVICTION PROOF:** For every candidate, tag `entity_context` as `"Consolidated"`, `"Standalone"`, or `"Unclear"`. Crucially, you must populate `scope_conviction_proof` by explaining **WHY** this metric falls in Standalone or Consolidated scope. Carefully inspect the surrounding visual layout: read the running page header at the top of the physical sheet, the chapter/section title, table main heading, and individual column headers before deciding. Never guess or default to Consolidated just because the report is a consolidated filing!
 5. **SOURCE TYPE TAGGING:** Tag `source_type` with an accurate description of the presentation format where you found the item—such as `AUDITED_TABLE`, `FOOTNOTE`, `NARRATIVE_PARAGRAPH`, `GRAPH`, `BAR_CHART`, `INFOGRAPHIC`, `KPI_HIGHLIGHTS_BOX`, `DIRECTORS_REPORT_TABLE`, `MD&A_CALLOUT`, etc. Be descriptive and accurate; disclosures can appear anywhere in the report!
 6. **STEP-BY-STEP SECTION TRAVERSAL STRATEGY:** To ensure exhaustive recall without missing anything across the document:
    - **Step 1:** Check the Table of Contents (TOC) if present, or scan the major section headings of the report to map out where financial performance, operational metrics, graphs, accounting policies, and statements are located.
@@ -51,6 +51,7 @@ Your sole purpose in Layer 1 is to perform an **Exhaustive Candidate Search** ac
       "metric_target": "Exact name of target metric",
       "forensic_reasoning_log": "Detailed notes on step-by-step section traversal and where/how this candidate was found",
       "entity_context": "Consolidated | Standalone | Unclear",
+      "scope_conviction_proof": "Explicit visual proof explaining WHY this candidate falls under Consolidated or Standalone scope (cite running page headers, chapter titles, table titles, column headings)",
       "source_type": "AUDITED_TABLE | FOOTNOTE | NARRATIVE_PARAGRAPH | GRAPH | BAR_CHART | INFOGRAPHIC | KPI_HIGHLIGHTS_BOX | etc.",
       "verbatim_source_text": "Exact complete row/sentence/label containing the value",
       "declared_unit": "Rs in Lakhs | Crores | % | Unstated",
@@ -92,23 +93,37 @@ INSTRUCTIONS:
 1. Search the ENTIRE PDF from cover to cover using a **step-by-step section traversal**: check the Table of Contents (TOC) or document structure first, then systematically iterate through every section (Highlights, Graphs/Charts, MD&A, Consolidated Statements, Standalone Statements, Notes to Accounts, Auditor's Report).
 2. Harvest every valid mention or candidate figure for **{metric['name']}** for the target FY.
 3. Do NOT discard candidates based on Consolidated vs Standalone preference or presentation format (table, graph, chart, infographic, footnote, narrative)—return the full candidate pool so our Layer 2 audit engine can evaluate all of them.
-4. Ensure every candidate includes its exact verbatim text, value, entity_context, descriptive source_type, page_number, and the mandatory physical line proofs (`page_verbatim_proof_above` and `page_verbatim_proof_below`). Record your step-by-step sectional findings in `forensic_reasoning_log`.
+4. Ensure every candidate includes its exact verbatim text, value, `entity_context`, descriptive `source_type`, `page_number`, mandatory physical line proofs (`page_verbatim_proof_above` and `page_verbatim_proof_below`), and the `scope_conviction_proof` explaining exactly why the candidate belongs to Consolidated or Standalone scope based on visual surrounding clues (running headers, table titles, or column headings). Record your step-by-step sectional findings in `forensic_reasoning_log`.
 
 If no candidates exist anywhere in the document, return `{{"candidates": []}}`.
 """
 
 
-def build_finalization_prompt(metric: MetricDef, candidates: list[dict]) -> str:
-    """Prompt for Layer 2 LLM finalization and verification."""
+def build_finalization_prompt(metric: MetricDef, candidates: list[dict], target_scope: str = "Consolidated") -> str:
+    """Prompt for Layer 2 LLM finalization and verification targeted to a specific entity scope."""
     candidates_json = json.dumps(candidates, indent=2)
     layer2_rules = metric.get(
         "layer2_rules",
-        "SCOPE PRUNING: Ensure candidate represents the overall company/group. Reject segment-level or subsidiary-only figures. Prefer Consolidated over Standalone.",
+        "SCOPE PRUNING: Ensure candidate represents the overall company/group. Reject segment-level or subsidiary-only figures.",
     )
-    return f"""AGENTIC FINALIZATION & AUDIT TASK (LAYER 2 - PRECISION SELECTION):
+    if target_scope == "Consolidated":
+        step3_text = """STEP 3: ENTITY SCOPE TARGETING & CONVICTION AUDIT (CONSOLIDATED FINALIZATION PASS)
+Look ONLY at the surviving, whole-company, formula-valid candidates from Step 2:
+- You are executing the CONSOLIDATED disclosures pass. You MUST evaluate candidates that belong to `entity_context: "Consolidated"` (or `entity_context: "Unclear"` if scope is not explicitly marked).
+- Carefully inspect each candidate's `scope_conviction_proof` and surrounding text. If a candidate is explicitly tagged as `entity_context: "Standalone"`, OR if the running header/table context on its physical page (`page_number`) clearly belongs to Standalone Financial Statements / Standalone Directors' Report, you MUST REJECT it immediately during this Consolidated pass!
+- Select the single best Consolidated winning candidate."""
+    else:
+        step3_text = """STEP 3: ENTITY SCOPE TARGETING & CONVICTION AUDIT (STANDALONE FINALIZATION PASS)
+Look ONLY at the surviving, whole-company, formula-valid candidates from Step 2:
+- You are executing the STANDALONE disclosures pass. You MUST evaluate candidates that belong to `entity_context: "Standalone"` (or `entity_context: "Unclear"` if scope is not explicitly marked).
+- Carefully inspect each candidate's `scope_conviction_proof` and surrounding text. If a candidate is explicitly tagged as `entity_context: "Consolidated"`, OR if the running header/table context on its physical page (`page_number`) clearly belongs to Consolidated Financial Statements, you MUST REJECT it immediately during this Standalone pass!
+- Select the single best Standalone winning candidate."""
+
+    return f"""AGENTIC FINALIZATION & AUDIT TASK (LAYER 2 - PRECISION SELECTION FOR {target_scope.upper()} SCOPE):
 
 You are an elite financial verification and finalization auditor.
 We have harvested {len(candidates)} candidate(s) for the target metric: **{metric['name']}**.
+Target Entity Scope for this Evaluation Pass: **{target_scope.upper()}**
 
 METRIC DEFINITION:
 {metric['definition']}
@@ -124,9 +139,9 @@ HARVESTED CANDIDATES POOL:
 
 YOUR TASK — EXECUTE THESE 4 SELECTION STEPS IN STRICT ORDER:
 
-STEP 1: PHYSICAL PAGE PROOF & SCOPE PRUNING (THE 'WHOLE COMPANY' RULE)
-Inspect each candidate's page proofs and table context:
-- If proof lines indicate a hallucination or mismatch, REJECT IMMEDIATELY.
+STEP 1: PHYSICAL PAGE PROOF & SCOPE CONVICTION AUDIT (THE 'WHOLE COMPANY' RULE)
+Inspect each candidate's page proofs, `scope_conviction_proof`, and table context:
+- If proof lines indicate a hallucination or mismatch with the physical sheet, REJECT IMMEDIATELY.
 - 🚨 SCOPE PRUNING & ANOMALY PREVENTION: Our goal is to extract metrics for the OVERALL COMPANY / GROUP. You MUST IMMEDIATELY REJECT any candidate from: (a) Segment Reporting (e.g., Note on Segment Information / Note 38/54), (b) Subsidiary-only disclosures (e.g., Note 39 water project collections), or (c) Joint-Venture only tables! Furthermore, for Cash Loss, strictly ban Operating Cash Flow (CFO) from the Cash Flow Statement. For Distributable Cash Flow, ban 'available for appropriation' in Indian GAAP reports.
 - Record rejections in `rejection_audit_log`: e.g., "[REJECTED Candidate on Page X]: Rejected Segment Report / Subsidiary figure; out of scope for overall company performance."
 
@@ -136,13 +151,11 @@ For surviving whole-company candidates, enforce the METRIC-SPECIFIC CLEARANCE & 
 - If a candidate violates the ban rules (e.g. selecting PBT as EBITDA), REJECT IMMEDIATELY!
 - Record rejections: e.g., "[REJECTED Candidate on Page Y]: Violated Proof of Exclusions rule; line item is after D&A."
 
-STEP 3: ENTITY SCOPE PREFERENCE (CONSOLIDATED OVER STANDALONE)
-Look ONLY at the surviving, whole-company, formula-valid candidates from Step 2:
-- If ANY valid candidate is tagged as `entity_context: "Consolidated"`, you MUST REJECT all `Standalone` candidates! Group-level Consolidated figures take precedence.
-- Only if ZERO valid Consolidated candidates survive Steps 1 & 2 may you accept a Standalone candidate (set `is_standalone_fallback_active: true`).
+{step3_text}
 
 STEP 4: SOURCE TYPE HIERARCHY & FINAL SELECTION
 Among remaining candidates, apply hierarchy: AUDITED_TABLE > FOOTNOTE > NARRATIVE / CHARTS.
+- 🚨 STRICT VERBATIM-PAGE BINDING: When returning your final `winning_candidate`, you MUST ensure that its `verbatim_source_text` literally exists on that exact `page_number` in the candidates pool. NEVER cross-contaminate or merge the text string from one candidate (e.g., Board's Report Page 22) with the page number of another candidate (e.g., P&L Page 78).
 Select the single winning candidate and output matching `FinalizedMetricPOC3` schema.
 
 OUTPUT DECISION:
@@ -155,12 +168,12 @@ Return JSON matching the `FinalizedMetricPOC3` schema:
   "metric_target": "{metric['name']}",
   "final_value": "string or null",
   "winning_candidate": {{ ...candidate object or null... }},
-  "is_standalone_fallback_active": false,
+  "is_standalone_fallback_active": {"true" if target_scope == "Standalone" else "false"},
   "rejection_audit_log": [
-    "[ACCEPTED Winner on Page X]: Primary Audited Table in Consolidated scope matching exact definition.",
-    "[REJECTED Candidate on Page Y]: Standalone scope rejected due to Consolidated preference."
+    "[ACCEPTED Winner on Page X]: Primary Audited Table in {target_scope} scope matching exact definition.",
+    "[REJECTED Candidate on Page Y]: Scope rejected during {target_scope} pass."
   ],
-  "final_forensic_summary": "One summary paragraph explaining the selection."
+  "final_forensic_summary": "One summary paragraph explaining the selection for {target_scope} scope."
 }}
 ```
 CRITICAL OUTPUT RULE: Return ONLY valid JSON parseable by `json.loads()`.

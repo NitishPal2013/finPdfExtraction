@@ -31,6 +31,10 @@ class CandidateMetricPOC3(BaseModel):
         default="Unclear",
         description="Whether this specific candidate figure is under Consolidated or Standalone statements."
     )
+    scope_conviction_proof: str = Field(
+        default="",
+        description="Explicit proof explaining WHY this candidate falls under Consolidated or Standalone scope. Cite specific visual layout clues: running page headers, table titles, column headings, or chapter titles on that physical page."
+    )
     source_type: str = Field(
         default="AUDITED_TABLE",
         description="Describe physical presentation format accurately (e.g., 'AUDITED_TABLE', 'FOOTNOTE', 'NARRATIVE_PARAGRAPH', 'GRAPH', 'BAR_CHART', 'INFOGRAPHIC', 'KPI_HIGHLIGHTS_BOX', 'DIRECTORS_REPORT_TABLE', 'MD&A_CALLOUT', etc.)."

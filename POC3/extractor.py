@@ -103,18 +103,28 @@ class ExtractionResultPOC3:
     company_display: str
     fy_year: str
     model: str
-    finalized_metrics: list[dict] = field(default_factory=list)
+    finalized_consolidated_metrics: list[dict] = field(default_factory=list)
+    finalized_standalone_metrics: list[dict] = field(default_factory=list)
     harvested_candidates: dict[str, list[dict]] = field(default_factory=dict)
-    coverage: dict[str, bool] = field(default_factory=dict)
+    consolidated_coverage: dict[str, bool] = field(default_factory=dict)
+    standalone_coverage: dict[str, bool] = field(default_factory=dict)
     totals: dict[str, Any] = field(default_factory=dict)
 
     @property
+    def finalized_metrics(self) -> list[dict]:
+        return self.finalized_consolidated_metrics
+
+    @property
+    def coverage(self) -> dict[str, bool]:
+        return self.consolidated_coverage
+
+    @property
     def found_count(self) -> int:
-        return sum(1 for v in self.coverage.values() if v)
+        return sum(1 for v in self.consolidated_coverage.values() if v)
 
     @property
     def missing_count(self) -> int:
-        return sum(1 for v in self.coverage.values() if not v)
+        return sum(1 for v in self.consolidated_coverage.values() if not v)
 
 
 def _parse_candidate_response(response) -> tuple[list[dict], dict]:
@@ -251,19 +261,20 @@ async def _finalize_one_metric(
     cache_name: str,
     semaphore: asyncio.Semaphore,
     emit: Callable[[str], None],
+    target_scope: str = "Consolidated",
 ) -> dict:
-    label = f"L2[{metric['name'][:20]}]"
+    label = f"L2[{target_scope[:4]}][{metric['name'][:18]}]"
     if not candidates:
         emit(f"[{label}] No candidates to finalize — skipping L2 API call")
         default_res = FinalizedMetricPOC3(
             metric_target=metric["name"],
             final_value=None,
             winning_candidate=None,
-            rejection_audit_log=["[LAYER 1]: Zero candidate mentions found across entire document."]
+            rejection_audit_log=[f"[LAYER 1]: 0 {target_scope} candidate mentions found across entire document. Bypassed Layer 2 finalization."]
         ).model_dump()
-        return {"metric": metric["name"], "status": "ok", "finalized": default_res, "usage": {}}
+        return {"metric": metric["name"], "status": "ok", "finalized": default_res, "usage": {}, "target_scope": target_scope}
 
-    prompt = build_finalization_prompt(metric, candidates)
+    prompt = build_finalization_prompt(metric, candidates, target_scope=target_scope)
     config = types.GenerateContentConfig(
         cached_content=cache_name,
         response_mime_type="application/json",
@@ -291,10 +302,28 @@ async def _finalize_one_metric(
 
     elapsed = time.time() - t0
     val = finalized.get("final_value")
+    win = finalized.get("winning_candidate")
+
+    # Deterministic PBT vs. EBIT/EBITDA safety net check:
+    if val is not None and win is not None:
+        metric_name = metric["name"]
+        verbatim = win.get("verbatim_source_text", "").lower()
+        source = win.get("source_type", "")
+        if any(m_type in metric_name for m_type in ["EBIT", "EBITDA"]):
+            if source == "AUDITED_TABLE" and ("before exceptional" in verbatim or "before tax" in verbatim or "profit before tax" in verbatim) and not any(addback in verbatim for addback in ["depreciation", "interest", "finance", "amortisation"]):
+                emit(f"[{label}] Deterministic rejection triggered: candidate verbatim '{win.get('verbatim_source_text')}' is statutory PBT, NOT EBIT/EBITDA!")
+                finalized["final_value"] = None
+                finalized["winning_candidate"] = None
+                finalized["rejection_audit_log"].append(
+                    f"[REJECTED via Deterministic Python Rule]: Rejected '{win.get('verbatim_source_text')}' on page {win.get('page_number')} as it represents Profit Before Tax (PBT) rather than {metric_name}."
+                )
+                val = None
+
     emit(f"[{label}] Finalized: {'FOUND (' + str(val) + ')' if val is not None else 'REJECTED ALL'} in {elapsed:.1f}s")
     return {
         "metric": metric["name"], "status": "ok",
-        "finalized": finalized, "usage": usage, "elapsed_s": round(elapsed, 2)
+        "finalized": finalized, "usage": usage, "elapsed_s": round(elapsed, 2),
+        "target_scope": target_scope
     }
 
 
@@ -361,25 +390,58 @@ async def run_extraction(
         for res in l1_results:
             harvested_candidates[res["metric"]] = res.get("candidates", [])
 
-        # Layer 2: LLM Finalization & Precision Selection
-        emit("\n--- LAYER 2: LLM FINALIZATION & PRECISION SELECTION ---")
-        l2_tasks = [
-            _finalize_one_metric(
-                metric=m, candidates=harvested_candidates.get(m["name"], []),
-                client=async_client, model=model,
-                cache_name=cache.name, semaphore=semaphore, emit=emit,
-            )
-            for m in METRIC_METADATA
-        ]
-        l2_results = await asyncio.gather(*l2_tasks)
+        # Layer 2: LLM Finalization & Precision Selection (Dual-Scope: Consolidated & Standalone)
+        emit("\n--- LAYER 2: LLM FINALIZATION & PRECISION SELECTION (DUAL-SCOPE) ---")
+        l2_tasks = []
+        for m in METRIC_METADATA:
+            mname = m["name"]
+            cands = harvested_candidates.get(mname, [])
+            cons_cands = [c for c in cands if c.get("entity_context") in ("Consolidated", "Unclear")]
+            std_cands = [c for c in cands if c.get("entity_context") in ("Standalone", "Unclear")]
 
-        finalized_metrics: list[dict] = []
-        coverage: dict[str, bool] = {}
-        for res in l2_results:
-            f_obj = res.get("finalized", {})
-            finalized_metrics.append(f_obj)
-            val = f_obj.get("final_value")
-            coverage[f_obj.get("metric_target", res["metric"])] = (val is not None)
+            if cons_cands:
+                l2_tasks.append(_finalize_one_metric(
+                    metric=m, candidates=cons_cands, client=async_client, model=model,
+                    cache_name=cache.name, semaphore=semaphore, emit=emit, target_scope="Consolidated"
+                ))
+            if std_cands:
+                l2_tasks.append(_finalize_one_metric(
+                    metric=m, candidates=std_cands, client=async_client, model=model,
+                    cache_name=cache.name, semaphore=semaphore, emit=emit, target_scope="Standalone"
+                ))
+
+        l2_results = await asyncio.gather(*l2_tasks) if l2_tasks else []
+        l2_cons_map = {res["metric"]: res for res in l2_results if res.get("target_scope") == "Consolidated"}
+        l2_std_map = {res["metric"]: res for res in l2_results if res.get("target_scope") == "Standalone"}
+
+        finalized_cons: list[dict] = []
+        finalized_std: list[dict] = []
+        cons_coverage: dict[str, bool] = {}
+        std_coverage: dict[str, bool] = {}
+
+        for m in METRIC_METADATA:
+            mname = m["name"]
+            # Consolidated slot
+            if mname in l2_cons_map:
+                f_cons = l2_cons_map[mname].get("finalized", {})
+            else:
+                f_cons = FinalizedMetricPOC3(
+                    metric_target=mname, final_value=None, winning_candidate=None,
+                    rejection_audit_log=["[LAYER 1]: 0 Consolidated candidate mentions found across entire document. Bypassed Layer 2 finalization."]
+                ).model_dump()
+            finalized_cons.append(f_cons)
+            cons_coverage[mname] = (f_cons.get("final_value") is not None)
+
+            # Standalone slot
+            if mname in l2_std_map:
+                f_std = l2_std_map[mname].get("finalized", {})
+            else:
+                f_std = FinalizedMetricPOC3(
+                    metric_target=mname, final_value=None, winning_candidate=None,
+                    rejection_audit_log=["[LAYER 1]: 0 Standalone candidate mentions found across entire document. Bypassed Layer 2 finalization."]
+                ).model_dump()
+            finalized_std.append(f_std)
+            std_coverage[mname] = (f_std.get("final_value") is not None)
 
         total_in = sum(r.get("usage", {}).get("input_tokens", 0) for r in l1_results + l2_results)
         total_out = sum(r.get("usage", {}).get("output_tokens", 0) for r in l1_results + l2_results)
@@ -387,7 +449,8 @@ async def run_extraction(
 
         totals = {
             "metrics_total": len(METRIC_METADATA),
-            "metrics_found": sum(1 for v in coverage.values() if v),
+            "metrics_found_cons": sum(1 for v in cons_coverage.values() if v),
+            "metrics_found_std": sum(1 for v in std_coverage.values() if v),
             "tokens_in": total_in,
             "tokens_out": total_out,
             "tokens_cached_hits": total_cached,
@@ -395,19 +458,22 @@ async def run_extraction(
         }
 
         emit("\n" + "=" * 70)
-        emit("POC3 COMPLETED")
-        emit(f"  Metrics found:   {totals['metrics_found']}/{totals['metrics_total']}")
-        emit(f"  Tokens:          in={total_in:,} out={total_out:,} cached={total_cached:,}")
-        emit(f"  Elapsed:         {totals['elapsed_seconds']}s")
+        emit("POC3 COMPLETED (DUAL-SCOPE)")
+        emit(f"  Consolidated found: {totals['metrics_found_cons']}/{totals['metrics_total']}")
+        emit(f"  Standalone found:   {totals['metrics_found_std']}/{totals['metrics_total']}")
+        emit(f"  Tokens:             in={total_in:,} out={total_out:,} cached={total_cached:,}")
+        emit(f"  Elapsed:            {totals['elapsed_seconds']}s")
         emit("=" * 70)
 
         return ExtractionResultPOC3(
             company_display=doc.company_display,
             fy_year=doc.fy_year,
             model=model,
-            finalized_metrics=finalized_metrics,
+            finalized_consolidated_metrics=finalized_cons,
+            finalized_standalone_metrics=finalized_std,
             harvested_candidates=harvested_candidates,
-            coverage=coverage,
+            consolidated_coverage=cons_coverage,
+            standalone_coverage=std_coverage,
             totals=totals,
         )
 

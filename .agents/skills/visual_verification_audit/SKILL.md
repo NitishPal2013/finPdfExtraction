@@ -12,23 +12,22 @@ This skill defines the mandatory standard operating procedure (SOP) and deep for
 
 ---
 
-## 1. Multimodal Verification Workflow & Mandatory Tool Enforcement (`view_file`)
+## 1. Multimodal Verification Workflow & Subagent Context Isolation (`invoke_subagent` + `view_file`)
 
-When executing a visual audit or verifying extraction accuracy (false positives, false negatives, True matches) on a source PDF, you MUST transition from text-based scraping to **multimodal visual inspection** by loading the physical rendering of the report via the `view_file` tool.
+When executing a visual audit or verifying extraction accuracy (false positives, false negatives, True matches) on a source PDF, you MUST transition from text-based scraping to **multimodal visual inspection** by loading the physical rendering of the report via the `view_file` tool inside an isolated subagent.
 
-### 🚨 MANDATORY HARD RULE: ZERO-TOLERANCE FOR TEXT-ONLY AUDITS (YOU MUST CALL `view_file`)
+### 🚨 MANDATORY HARD RULE: SUBAGENT CONTEXT ISOLATION & ZERO-TOLERANCE FOR TEXT-ONLY AUDITS
 * **ABSOLUTE RULE:** You are **STRICTLY FORBIDDEN** from conducting a "verification audit" or claiming to verify results by solely reading JSON (`.json`), Excel (`.xlsx`), or terminal text logs!
-* **MANDATORY TOOL CALL:** For every fiscal year under visual audit, you **MUST explicitly invoke the `view_file` tool** on the source PDF (`<year>.pdf`) so that the physical document (layout, typography, tables, headers, note titles, and numbers) is loaded into your multimodal vision context window.
-* **VIOLATION CONSEQUENCE:** Any verification report or response produced without explicitly executing `view_file` on the source PDF is considered **NULL, VOID, and a Severe Behavioral Violation**.
+* **MANDATORY SUBAGENT ISOLATION:** Because Annual Report PDFs contain hundreds of pages of high-resolution visual scans, loading them directly into the parent context window will rapidly pollute and saturate the main conversation context. Therefore, **you MUST NOT call `view_file` on large binary `.pdf` files directly in the main/parent context window!**
+* **SUBAGENT DELEGATION:** For every fiscal year under visual audit, you **MUST spawn a dedicated verification subagent** (via `invoke_subagent` using `self` or `research` type) tasked specifically with invoking `view_file` on `<year>.pdf`. The subagent will physically inspect the visual layout (typography, tables, running headers, note titles, and numbers) inside its isolated context window and report back the clean verification findings.
+* **VIOLATION CONSEQUENCE:** Any verification report produced without `view_file` executed inside a verification subagent is considered **NULL, VOID, and a Severe Behavioral Violation**.
 
-### 🚨 Critical Token & Context Optimization Rule (Single-Pass Loading)
-Annual Report PDFs contain hundreds of pages of high-resolution scans and complex tables.
-* **SINGLE-PASS BUDGET:** When auditing a fiscal year, you must call `view_file` on the source PDF (`<year>.pdf`) **EXACTLY ONCE**.
-* **Why:** Calling `view_file` multiple times on a 250+ page PDF will rapidly saturate your context window and trigger a >1,000,000 token limit error.
+### 🚨 Critical Token & Context Optimization Rule (Subagent Single-Pass Loading)
+* **SINGLE-PASS BUDGET:** When the delegated subagent audits a fiscal year, it must call `view_file` on `<year>.pdf` **EXACTLY ONCE** inside its own context.
 * **Audit Workflow:**
-  1. **Harvest JSON Audit Trail:** First, inspect the extracted JSON file (`_POC3.json`) via `run_command` or `view_file` to list all found and null metrics, noting their `page_number`, `verbatim_source_text`, `value_num`, and `entity_context`.
-  2. **Mandatory Single-Pass PDF Loading (`view_file`):** Call `view_file` on `<year>.pdf` exactly once.
-  3. **Visual Cross-Referencing & Physical Evidence:** With the visual pages loaded in your multimodal context window, navigate directly to the physical page numbers and visually verify the headers, table boundaries, and numerical scale (`Lacs` vs `Crores`) across all metrics in a single comprehensive review.
+  1. **Harvest JSON Audit Trail (Parent or Subagent):** First, inspect the extracted JSON file (`_POC3.json`) via `run_command` or `view_file` to list all found and null metrics, noting their `page_number`, `verbatim_source_text`, `value_num`, and `entity_context`.
+  2. **Spawn Verification Subagent (`invoke_subagent`):** Launch a subagent with clear instructions containing the harvested metrics and physical `page_number` targets to verify on `<year>.pdf`.
+  3. **Subagent Visual Cross-Referencing:** Inside the subagent, call `view_file` on `<year>.pdf` exactly once, navigate directly to the target physical page numbers, and visually verify the running headers, table boundaries, entity scope (`Consolidated` vs `Standalone`), and numerical scale (`Lacs` vs `Crores`). Report the structured verification findings back to the parent agent.
 
 ---
 
