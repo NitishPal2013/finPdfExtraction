@@ -35,13 +35,14 @@ Your sole purpose in Layer 1 is to perform an **Exhaustive Candidate Search** ac
    - Capture the exact verbatim printed text of the line immediately BELOW the match (`page_verbatim_proof_below`).
    - Set `absolute_page_confirmation` to true.
 4. **ENTITY CONTEXT TAGGING & SCOPE CONVICTION PROOF:** For every candidate, tag `entity_context` as `"Consolidated"`, `"Standalone"`, or `"Unclear"`. Crucially, you must populate `scope_conviction_proof` by explaining **WHY** this metric falls in Standalone or Consolidated scope. Carefully inspect the surrounding visual layout: read the running page header at the top of the physical sheet, the chapter/section title, table main heading, and individual column headers before deciding. Never guess or default to Consolidated just because the report is a consolidated filing!
-5. **SOURCE TYPE TAGGING:** Tag `source_type` with an accurate description of the presentation format where you found the item—such as `AUDITED_TABLE`, `FOOTNOTE`, `NARRATIVE_PARAGRAPH`, `GRAPH`, `BAR_CHART`, `INFOGRAPHIC`, `KPI_HIGHLIGHTS_BOX`, `DIRECTORS_REPORT_TABLE`, `MD&A_CALLOUT`, etc. Be descriptive and accurate; disclosures can appear anywhere in the report!
-6. **STEP-BY-STEP SECTION TRAVERSAL STRATEGY:** To ensure exhaustive recall without missing anything across the document:
+5. **MULTI-COLUMN HEADER TRAPPING:** In tables with multiple side-by-side columns presenting different scopes and fiscal years (e.g., Standalone CY, Standalone PY, Consolidated CY, Consolidated PY), you MUST trace column headers vertically from the target year and scope column down to the exact cell. Never drift or shift to adjacent columns (e.g., extracting prior year or standalone values for a current year consolidated target).
+6. **SOURCE TYPE TAGGING:** Tag `source_type` with an accurate description of the presentation format where you found the item—such as `AUDITED_TABLE`, `FOOTNOTE`, `NARRATIVE_PARAGRAPH`, `GRAPH`, `BAR_CHART`, `INFOGRAPHIC`, `KPI_HIGHLIGHTS_BOX`, `DIRECTORS_REPORT_TABLE`, `MD&A_CALLOUT`, etc. Be descriptive and accurate; disclosures can appear anywhere in the report!
+7. **STEP-BY-STEP SECTION TRAVERSAL STRATEGY:** To ensure exhaustive recall without missing anything across the document:
    - **Step 1:** Check the Table of Contents (TOC) if present, or scan the major section headings of the report to map out where financial performance, operational metrics, graphs, accounting policies, and statements are located.
    - **Step 2:** Systematically iterate through each relevant section one by one (e.g., Highlights & Infographics -> Directors' Report -> Management Discussion & Analysis -> Consolidated Financial Statements -> Standalone Financial Statements -> Notes to Accounts).
    - **Step 3:** For each section traversed, search for any trace or mention of the target metric or its synonyms, capturing all candidates found. Record your traversal notes in `forensic_reasoning_log`.
 8. **EXCLUSION OF OUT-OF-SCOPE SECTIONS (SEGMENT & SUBSIDIARIES):** Do not harvest candidates from Note on Segment Reporting / Segment Information (e.g. Note 38 / Note 54) or Subsidiary-only / Joint Venture project notes (e.g. Note 39) unless evaluating a sector-specific division. Segment EBIT and project collections are partial business lines and must NOT be harvested as whole-company candidates!
-7. **THE NULL DEFAULT:** If after an exhaustive search from start to finish you find zero mentions of the metric or its accepted synonyms, return an empty `candidates` list.
+9. **THE NULL DEFAULT:** If after an exhaustive search from start to finish you find zero mentions of the metric or its accepted synonyms, return an empty `candidates` list.
 
 ### JSON SCHEMA
 ```json
@@ -153,8 +154,9 @@ For surviving whole-company candidates, enforce the METRIC-SPECIFIC CLEARANCE & 
 
 {step3_text}
 
-STEP 4: SOURCE TYPE HIERARCHY & FINAL SELECTION
-Among remaining candidates, apply hierarchy: AUDITED_TABLE > FOOTNOTE > NARRATIVE / CHARTS.
+STEP 4: SOURCE TYPE HIERARCHY & FINAL SELECTION (STATUTORY AUDIT PRECEDENCE)
+Among remaining candidates, apply strict hierarchy: AUDITED_TABLE > NOTES_TABLE > MD&A_TABLE > FOOTNOTE > NARRATIVE_PARAGRAPH / CHARTS.
+- 🚨 UNIVERSAL AUDIT PRECEDENCE OVER NARRATIVE HIGHLIGHTS: Whenever a candidate found in an `AUDITED_TABLE` or formal `MD&A_TABLE` conflicts with a candidate found in a front-of-report `NARRATIVE_PARAGRAPH` or `KPI_HIGHLIGHTS_BOX` (such as the Directors' Report highlights section), you MUST ALWAYS reject the narrative highlight and select the formal statement/table candidate! Front-of-report management summaries frequently conflate Consolidated figures into Standalone narrative text.
 - 🚨 STRICT VERBATIM-PAGE BINDING: When returning your final `winning_candidate`, you MUST ensure that its `verbatim_source_text` literally exists on that exact `page_number` in the candidates pool. NEVER cross-contaminate or merge the text string from one candidate (e.g., Board's Report Page 22) with the page number of another candidate (e.g., P&L Page 78).
 Select the single winning candidate and output matching `FinalizedMetricPOC3` schema.
 

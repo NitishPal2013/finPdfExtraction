@@ -443,6 +443,66 @@ async def run_extraction(
             finalized_std.append(f_std)
             std_coverage[mname] = (f_std.get("final_value") is not None)
 
+        # ── Deterministic Post-Processing Firewalls & Guards ─────────────────────
+        def _apply_post_processing_guards(metrics: list[dict], scope_name: str):
+            # Create a lookup map by metric target
+            m_map = {m["metric_target"]: m for m in metrics}
+            
+            # 1. EBIT Margin vs EBITDA Margin Guard
+            ebit_m = m_map.get("EBIT Margin")
+            ebitda_m = m_map.get("EBITDA Margin")
+            if ebit_m and ebitda_m:
+                val1 = ebit_m.get("final_value")
+                val2 = ebitda_m.get("final_value")
+                if val1 is not None and val2 is not None and val1 == val2:
+                    emit(f"[{scope_name}] Duplicate Margin detected ({val1}%). Applying EBIT/EBITDA Margin Guard.")
+                    ebitda_m["final_value"] = None
+                    ebitda_m["winning_candidate"] = None
+                    ebitda_m["rejection_audit_log"].append(
+                        f"[REJECTED via Deterministic EBIT/EBITDA Margin Guard]: EBITDA Margin cannot equal EBIT Margin (identical value '{val1}%'). Rejected duplicate EBITDA Margin in favor of EBIT Margin."
+                    )
+            
+            # 2. EBITDA vs Adjusted EBITDA Duplicate Firewall
+            ebitda = m_map.get("EBITDA")
+            adj_ebitda = m_map.get("Adjusted EBITDA")
+            if ebitda and adj_ebitda:
+                val_eb = ebitda.get("final_value")
+                val_adj = adj_ebitda.get("final_value")
+                if val_eb is not None and val_adj is not None and val_eb == val_adj:
+                    win_adj = adj_ebitda.get("winning_candidate") or {}
+                    verbatim = win_adj.get("verbatim_source_text", "").lower()
+                    adj_keywords = ["exceptional", "adjustment", "one-time", "pro-forma", "adjusted", "normalized", "extraordinary"]
+                    if not any(kw in verbatim for kw in adj_keywords):
+                        emit(f"[{scope_name}] Duplicate EBITDA/Adjusted EBITDA detected ({val_eb}). Applying Adjusted EBITDA Duplicate Firewall.")
+                        adj_ebitda["final_value"] = None
+                        adj_ebitda["winning_candidate"] = None
+                        adj_ebitda["rejection_audit_log"].append(
+                            f"[REJECTED via Deterministic Adjusted EBITDA Duplicate Firewall]: Adjusted EBITDA equals unadjusted EBITDA ('{val_eb}') but verbatim text contains no adjustment keywords. Rejected duplicate Adjusted EBITDA."
+                        )
+            
+            # 3. Consolidated CARO Cash Loss Firewall
+            if scope_name == "Consolidated":
+                for m_target in ["Cash Loss", "Cash Loss Incurrence Status"]:
+                    m_item = m_map.get(m_target)
+                    if m_item and m_item.get("final_value") is not None:
+                        win = m_item.get("winning_candidate") or {}
+                        verbatim = win.get("verbatim_source_text", "").lower()
+                        ref_log = win.get("forensic_reasoning_log", "").lower()
+                        if any(kw in verbatim or kw in ref_log for kw in ["caro", "clause", "xvii"]):
+                            emit(f"[{scope_name}] Standalone CARO Cash Loss leaked into Consolidated for {m_target}. Applying CARO Firewall.")
+                            m_item["final_value"] = None
+                            m_item["winning_candidate"] = None
+                            m_item["rejection_audit_log"].append(
+                                f"[REJECTED via Deterministic CARO Firewall]: Standalone CARO Clause (xvii) details are not applicable to Consolidated Financial Statements."
+                            )
+
+        _apply_post_processing_guards(finalized_cons, "Consolidated")
+        _apply_post_processing_guards(finalized_std, "Standalone")
+
+        # Recalculate coverage cover dicts
+        cons_coverage = {m["metric_target"]: (m.get("final_value") is not None) for m in finalized_cons}
+        std_coverage = {m["metric_target"]: (m.get("final_value") is not None) for m in finalized_std}
+
         total_in = sum(r.get("usage", {}).get("input_tokens", 0) for r in l1_results + l2_results)
         total_out = sum(r.get("usage", {}).get("output_tokens", 0) for r in l1_results + l2_results)
         total_cached = sum(r.get("usage", {}).get("cached_tokens", 0) for r in l1_results + l2_results)
