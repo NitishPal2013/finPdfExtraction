@@ -41,7 +41,7 @@ Your sole purpose in Layer 1 is to perform an **Exhaustive Candidate Search** ac
    - **Step 1:** Check the Table of Contents (TOC) if present, or scan the major section headings of the report to map out where financial performance, operational metrics, graphs, accounting policies, and statements are located.
    - **Step 2:** Systematically iterate through each relevant section one by one (e.g., Highlights & Infographics -> Directors' Report -> Management Discussion & Analysis -> Consolidated Financial Statements -> Standalone Financial Statements -> Notes to Accounts).
    - **Step 3:** For each section traversed, search for any trace or mention of the target metric or its synonyms, capturing all candidates found. Record your traversal notes in `forensic_reasoning_log`.
-8. **EXCLUSION OF OUT-OF-SCOPE SECTIONS (SEGMENT & SUBSIDIARIES):** Do not harvest candidates from Note on Segment Reporting / Segment Information (e.g. Note 38 / Note 54) or Subsidiary-only / Joint Venture project notes (e.g. Note 39) unless evaluating a sector-specific division. Segment EBIT and project collections are partial business lines and must NOT be harvested as whole-company candidates!
+8. **HARVESTING FROM SEGMENT & SUBSIDIARY SECTIONS:** You ARE ALLOWED to harvest candidates from Note on Segment Reporting / Segment Information (e.g. Note 38 / Note 54 / Operating Offerings tables) so they can be evaluated during Standalone entity analysis, but you MUST tag their `source_type` as `SEGMENT_REPORT_TABLE`. However, you MUST NOT harvest partial project collections or subsidiary-only / Joint-Venture disclosures (e.g., Note 39 water project collections) unless evaluating a sector-specific operational metric!
 9. **THE NULL DEFAULT:** If after an exhaustive search from start to finish you find zero mentions of the metric or its accepted synonyms, return an empty `candidates` list.
 
 ### JSON SCHEMA
@@ -108,12 +108,24 @@ def build_finalization_prompt(metric: MetricDef, candidates: list[dict], target_
         "SCOPE PRUNING: Ensure candidate represents the overall company/group. Reject segment-level or subsidiary-only figures.",
     )
     if target_scope == "Consolidated":
+        step1_text = """STEP 1: PHYSICAL PAGE PROOF & CONSOLIDATED SCOPE PRUNING
+Inspect each candidate's page proofs, `scope_conviction_proof`, and table context:
+- If proof lines indicate a hallucination or mismatch with the physical sheet, REJECT IMMEDIATELY.
+- 🚨 CONSOLIDATED SCOPE PRUNING & ANOMALY PREVENTION: Our goal is to extract metrics for the OVERALL CONSOLIDATED GROUP. You MUST IMMEDIATELY REJECT any candidate harvested from Segment Reporting (e.g., Note on Segment Information / Note 38/54 / Operating Offerings tables), Subsidiary-only disclosures (e.g., Note 39 water project collections), or Joint-Venture only tables! Furthermore, for Cash Loss, strictly ban Operating Cash Flow (CFO) from the Cash Flow Statement. For Distributable Cash Flow, ban 'available for appropriation' in Indian GAAP reports.
+- Record rejections in `rejection_audit_log`: e.g., "[REJECTED Candidate on Page X]: Rejected Segment Report / Subsidiary figure; out of scope for Consolidated group performance."""
+
         step3_text = """STEP 3: ENTITY SCOPE TARGETING & CONVICTION AUDIT (CONSOLIDATED FINALIZATION PASS)
 Look ONLY at the surviving, whole-company, formula-valid candidates from Step 2:
 - You are executing the CONSOLIDATED disclosures pass. You MUST evaluate candidates that belong to `entity_context: "Consolidated"` (or `entity_context: "Unclear"` if scope is not explicitly marked).
 - Carefully inspect each candidate's `scope_conviction_proof` and surrounding text. If a candidate is explicitly tagged as `entity_context: "Standalone"`, OR if the running header/table context on its physical page (`page_number`) clearly belongs to Standalone Financial Statements / Standalone Directors' Report, you MUST REJECT it immediately during this Consolidated pass!
 - Select the single best Consolidated winning candidate."""
     else:
+        step1_text = """STEP 1: PHYSICAL PAGE PROOF & STANDALONE SCOPE PRUNING
+Inspect each candidate's page proofs, `scope_conviction_proof`, and table context:
+- If proof lines indicate a hallucination or mismatch with the physical sheet, REJECT IMMEDIATELY.
+- 🚨 STANDALONE SCOPE PRUNING & ANOMALY PREVENTION: Our goal is to extract metrics for the STANDALONE PARENT COMPANY. Unlike Consolidated disclosures where Segment Reporting is strictly banned, for Standalone disclosures you ARE ALLOWED to evaluate and select candidates from Segment Reporting (e.g., Note on Segment Information / Operating Offerings tables) when they represent the parent entity's core operational disclosures. However, you MUST STILL IMMEDIATELY REJECT any candidate from Subsidiary-only disclosures (since subsidiaries belong solely to Consolidated) or Joint-Venture only tables! Furthermore, for Cash Loss, strictly ban Operating Cash Flow (CFO) from the Cash Flow Statement. For Distributable Cash Flow, ban 'available for appropriation' in Indian GAAP reports.
+- Record rejections in `rejection_audit_log`: e.g., "[REJECTED Candidate on Page X]: Rejected Subsidiary figure; out of scope for Standalone parent entity."""
+
         step3_text = """STEP 3: ENTITY SCOPE TARGETING & CONVICTION AUDIT (STANDALONE FINALIZATION PASS)
 Look ONLY at the surviving, whole-company, formula-valid candidates from Step 2:
 - You are executing the STANDALONE disclosures pass. You MUST evaluate candidates that belong to `entity_context: "Standalone"` (or `entity_context: "Unclear"` if scope is not explicitly marked).
@@ -140,11 +152,7 @@ HARVESTED CANDIDATES POOL:
 
 YOUR TASK — EXECUTE THESE 4 SELECTION STEPS IN STRICT ORDER:
 
-STEP 1: PHYSICAL PAGE PROOF & SCOPE CONVICTION AUDIT (THE 'WHOLE COMPANY' RULE)
-Inspect each candidate's page proofs, `scope_conviction_proof`, and table context:
-- If proof lines indicate a hallucination or mismatch with the physical sheet, REJECT IMMEDIATELY.
-- 🚨 SCOPE PRUNING & ANOMALY PREVENTION: Our goal is to extract metrics for the OVERALL COMPANY / GROUP. You MUST IMMEDIATELY REJECT any candidate from: (a) Segment Reporting (e.g., Note on Segment Information / Note 38/54), (b) Subsidiary-only disclosures (e.g., Note 39 water project collections), or (c) Joint-Venture only tables! Furthermore, for Cash Loss, strictly ban Operating Cash Flow (CFO) from the Cash Flow Statement. For Distributable Cash Flow, ban 'available for appropriation' in Indian GAAP reports.
-- Record rejections in `rejection_audit_log`: e.g., "[REJECTED Candidate on Page X]: Rejected Segment Report / Subsidiary figure; out of scope for overall company performance."
+{step1_text}
 
 STEP 2: METRIC-SPECIFIC FORMULA & EXCLUSION VERIFICATION
 For surviving whole-company candidates, enforce the METRIC-SPECIFIC CLEARANCE & FORMULA RULES above:
