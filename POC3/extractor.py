@@ -444,6 +444,17 @@ async def run_extraction(
             std_coverage[mname] = (f_std.get("final_value") is not None)
 
         # ── Deterministic Post-Processing Firewalls & Guards ─────────────────────
+        def _normalize_val(v):
+            if v is None:
+                return None
+            s = str(v).replace("%", "").replace(",", "").replace("₹", "").replace("Rs.", "").replace("Rs", "").strip().lower()
+            for word in ["crore", "crores", "cr", "lakh", "lakhs", "lac", "lacs", "million", "millions", "mn", "billion", "billions", "bn", "inr", "usd"]:
+                s = s.replace(word, "").strip()
+            try:
+                return float(s)
+            except ValueError:
+                return s
+
         def _apply_post_processing_guards(metrics: list[dict], scope_name: str):
             # Create a lookup map by metric target
             m_map = {m["metric_target"]: m for m in metrics}
@@ -454,12 +465,14 @@ async def run_extraction(
             if ebit_m and ebitda_m:
                 val1 = ebit_m.get("final_value")
                 val2 = ebitda_m.get("final_value")
-                if val1 is not None and val2 is not None and val1 == val2:
-                    emit(f"[{scope_name}] Duplicate Margin detected ({val1}%). Applying EBIT/EBITDA Margin Guard.")
+                val1_clean = _normalize_val(val1)
+                val2_clean = _normalize_val(val2)
+                if val1_clean is not None and val2_clean is not None and val1_clean == val2_clean:
+                    emit(f"[{scope_name}] Duplicate Margin detected (EBIT Margin: {val1}, EBITDA Margin: {val2}). Applying EBIT/EBITDA Margin Guard.")
                     ebitda_m["final_value"] = None
                     ebitda_m["winning_candidate"] = None
                     ebitda_m["rejection_audit_log"].append(
-                        f"[REJECTED via Deterministic EBIT/EBITDA Margin Guard]: EBITDA Margin cannot equal EBIT Margin (identical value '{val1}%'). Rejected duplicate EBITDA Margin in favor of EBIT Margin."
+                        f"[REJECTED via Deterministic EBIT/EBITDA Margin Guard]: EBITDA Margin cannot equal EBIT Margin (identical value '{val2}'). Rejected duplicate EBITDA Margin in favor of EBIT Margin."
                     )
             
             # 2. EBITDA vs Adjusted EBITDA Duplicate Firewall
@@ -468,16 +481,18 @@ async def run_extraction(
             if ebitda and adj_ebitda:
                 val_eb = ebitda.get("final_value")
                 val_adj = adj_ebitda.get("final_value")
-                if val_eb is not None and val_adj is not None and val_eb == val_adj:
+                val_eb_clean = _normalize_val(val_eb)
+                val_adj_clean = _normalize_val(val_adj)
+                if val_eb_clean is not None and val_adj_clean is not None and val_eb_clean == val_adj_clean:
                     win_adj = adj_ebitda.get("winning_candidate") or {}
                     verbatim = win_adj.get("verbatim_source_text", "").lower()
                     adj_keywords = ["exceptional", "adjustment", "one-time", "pro-forma", "adjusted", "normalized", "extraordinary"]
                     if not any(kw in verbatim for kw in adj_keywords):
-                        emit(f"[{scope_name}] Duplicate EBITDA/Adjusted EBITDA detected ({val_eb}). Applying Adjusted EBITDA Duplicate Firewall.")
+                        emit(f"[{scope_name}] Duplicate EBITDA/Adjusted EBITDA detected (EBITDA: {val_eb}, Adjusted EBITDA: {val_adj}). Applying Adjusted EBITDA Duplicate Firewall.")
                         adj_ebitda["final_value"] = None
                         adj_ebitda["winning_candidate"] = None
                         adj_ebitda["rejection_audit_log"].append(
-                            f"[REJECTED via Deterministic Adjusted EBITDA Duplicate Firewall]: Adjusted EBITDA equals unadjusted EBITDA ('{val_eb}') but verbatim text contains no adjustment keywords. Rejected duplicate Adjusted EBITDA."
+                            f"[REJECTED via Deterministic Adjusted EBITDA Duplicate Firewall]: Adjusted EBITDA equals unadjusted EBITDA ('{val_adj}') but verbatim text contains no adjustment keywords. Rejected duplicate Adjusted EBITDA."
                         )
             
             # 3. Consolidated CARO Cash Loss Firewall
@@ -571,8 +586,11 @@ async def run_extraction_company(
     outcomes = []
     for pdf in pdfs:
         t0 = time.time()
-        out_xlsx = pdf.parent / f"{pdf.stem}_POC3.xlsx"
-        out_json = pdf.parent / f"{pdf.stem}_POC3.json"
+        
+        # Use out-suffix if provided, default to _POC3
+        suffix = out_suffix if out_suffix else "_POC3"
+        out_xlsx = pdf.parent / f"{pdf.stem}{suffix}.xlsx"
+        out_json = pdf.parent / f"{pdf.stem}{suffix}.json"
 
         if out_xlsx.exists() and not force:
             print(f"[{company_name}] {pdf.name} -> already exists ({out_xlsx.name}), skipping.")
@@ -620,6 +638,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Gemini model name")
     parser.add_argument("--concurrency", type=int, default=4, help="Semaphore concurrency limit")
     parser.add_argument("--force", action="store_true", help="Overwrite existing workbooks")
+    parser.add_argument("--out-suffix", required=False, default="_POC3", help="Suffix for output files (default: _POC3)")
     args = parser.parse_args()
 
     if args.company_dir:
@@ -635,8 +654,9 @@ if __name__ == "__main__":
         doc_paths = derive_paths(pdf_p, company_name=args.company, fy_override=args.year)
         result = asyncio.run(run_extraction(doc_paths, model=args.model, concurrency=args.concurrency))
 
-        out_xlsx = pdf_p.parent / f"{pdf_p.stem}_POC3.xlsx"
-        out_json = pdf_p.parent / f"{pdf_p.stem}_POC3.json"
+        suffix = args.out_suffix if args.out_suffix else "_POC3"
+        out_xlsx = pdf_p.parent / f"{pdf_p.stem}{suffix}.xlsx"
+        out_json = pdf_p.parent / f"{pdf_p.stem}{suffix}.json"
 
         try:
             from POC3.excel_export import export_to_excel

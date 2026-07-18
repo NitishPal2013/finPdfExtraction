@@ -73,40 +73,93 @@ METRIC_METADATA: list[MetricDef] = [
     {
         "name": "Normalized Earnings",
         "type": "Currency",
-        "accept": ["Normalized Earnings", "Normalized PAT", "Normalized Net Income", "Normalized Profit", "Normalized Profit After Tax"],
-        "reject": ["Adjusted Earnings", "Adjusted PAT", "Core Earnings", "Core PAT", "Recurring Earnings", "Reported PAT", "Net Profit", "Net Income", "Basic Earnings", "Normalized EPS", "Normalized EBITDA", "Normalized Credit Cost"],
+        "accept": [
+            "Normalized Earnings", "Normalized PAT", "Normalized Net Income", "Normalized Profit", 
+            "Normalized Profit After Tax", "PAT (Normalized)", "Normalized Net Profit", 
+            "Normalized PAT attributable to equity shareholders", "Normalized Net Income attributable to shareholders of the parent",
+            "PAT before exceptional items (net of tax)", "Net profit before exceptional items after tax", 
+            "Normalized Net Profit (ex-one offs)", "Pro-forma Normalized Net Income"
+        ],
+        "reject": [
+            "Adjusted Earnings", "Adjusted PAT", "Core Earnings", "Core PAT", "Recurring Earnings", 
+            "Reported PAT", "Net Profit", "Net Income", "Basic Earnings", "Normalized EPS", 
+            "Normalized EBITDA", "Normalized Credit Cost", "Normalized PBT", "Normalized Profit Before Tax", 
+            "Normalized EBT", "Normalized Operating Profit", "Normalized EBIT", "Total Comprehensive Income", 
+            "Comprehensive Income (Normalized)", "Other Comprehensive Income", "Normalized Segment Profit"
+        ],
         "definition": (
-            "Earnings calculated by smoothing out fluctuations or one-off items to reflect a 'steady-state' profit level.\n"
+            "Earnings calculated by smoothing out fluctuations, non-recurring anomalies, or one-off exceptional items to reflect a 'steady-state' bottom-line profit level after tax.\n"
             "DISCRIMINATOR RULES:\n"
-            "- VALUE TYPE: Absolute Currency (a total Rs/USD bottom-line figure — NEVER per-share, NEVER a percentage).\n"
-            "- BASIS: Normalized — the printed label MUST literally contain 'Normalized' attached to Earnings / PAT / Net Income / Net Profit.\n"
-            "- NEVER MAP TO THIS BUCKET: 'Adjusted X' (→ Adjusted Earnings) and 'Core X' / 'Recurring X' (separate buckets) — route by the exact qualifier word; Reported PAT / Net Income (statutory); Normalized EPS (per-share, separate); Normalized EBITDA / Normalized Credit Cost (different financial concepts)."
+            "- VALUE TYPE: Absolute Currency at the bottom-line post-tax level (a total Rs/USD figure — NEVER per-share, NEVER pre-tax PBT, NEVER a percentage).\n"
+            "- BASIS: Normalized — the printed label MUST literally contain 'Normalized' attached to Earnings / PAT / Net Income / Net Profit, OR represent statutory Net Profit after tax explicitly adjusted to exclude one-off exceptional items (`PAT before exceptional items net of tax`).\n"
+            "- NEVER MAP TO THIS BUCKET: 'Adjusted X' (→ Adjusted Earnings) and 'Core X' / 'Recurring X' (separate buckets) — route by the exact qualifier word on the page; Reported PAT / Net Income (statutory unadjusted); Normalized EPS (per-share); Normalized EBITDA / Normalized PBT (pre-tax or pre-D&A concepts); Total Comprehensive Income (`OCI` inclusion)."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP ACCOUNTING & SCOPE VERIFICATION:\n"
+            "1. STEP 1 (🚨 POST-TAX & POST-INTEREST FIREWALL - CRITICAL): ACTIVATE KNOWLEDGE of Ind AS Schedule III P&L Structure. You are evaluating Normalized Earnings (`Normalized PAT / Net Income`). The candidate MUST be after subtracting both Finance Costs (`Interest`) and Income Tax (`Current & Deferred Tax`)! If a candidate is labeled 'Normalized PBT', 'Normalized Profit Before Tax', 'Profit before exceptional items and tax', or 'Normalized Operating Profit', you MUST STRICTLY REJECT IT!\n"
+            "2. STEP 2 (TAX-EFFECTED EXCEPTIONAL ITEMS CHECK): ACTIVATE KNOWLEDGE of Ind AS 33/34. If the figure is derived from statutory profit by removing Exceptional Items, verify that the tax impact of the exceptional item was applied (e.g., 'PAT before exceptional items (net of tax)' or 'Net Profit excluding exceptional items after tax'). Do not grab pre-tax exceptional adjustments.\n"
+            "3. STEP 3 (OCI & COMPREHENSIVE INCOME EXCLUSION): ACTIVATE KNOWLEDGE of Ind AS 1. Strictly reject 'Total Comprehensive Income' or 'Other Comprehensive Income (OCI)'. Normalized Earnings corresponds strictly to Net Profit (`PAT`) attributable to equity shareholders.\n"
+            "4. STEP 4 (DUAL-SCOPE ENFORCEMENT): For Consolidated scope, select group-level Normalized PAT attributable to owners of the parent. Strictly reject standalone parent 'Normalized PAT before dividend from subsidiaries' or Note 38/54 segment profit."
         ),
     },
     {
         "name": "Core Earnings",
         "type": "Currency",
-        "accept": ["Core Earnings", "Core PAT", "Core Net Income", "Core Profit", "Underlying Profit"],
-        "reject": ["Adjusted Earnings", "Normalized Earnings", "Recurring Earnings", "Net Income", "Net Profit", "Reported PAT", "EBITDA", "Core Operating Profit", "Core Margin", "Base Business Margin", "Core Revenue"],
+        "accept": [
+            "Core Earnings", "Core PAT", "Core Net Income", "Core Profit", "Underlying Profit", 
+            "Core Net Profit", "Underlying PAT", "Underlying Net Income", "PAT from core operations", 
+            "Net Profit from core operations", "Core PAT attributable to equity shareholders", 
+            "Core Net Profit (excluding treasury income)", "Underlying Net Income attributable to shareholders"
+        ],
+        "reject": [
+            "Adjusted Earnings", "Normalized Earnings", "Recurring Earnings", "Net Income", "Net Profit", 
+            "Reported PAT", "EBITDA", "Core Operating Profit", "Core Margin", "Base Business Margin", 
+            "Core Revenue", "Core PBT", "Underlying Profit Before Tax", "Core Profit Before Tax", 
+            "Core EBITDA", "Underlying EBITDA", "Segment Core Profit", "Treasury Income", "Other Income"
+        ],
         "definition": (
-            "Profit derived solely from the primary business activities, excluding investment income or secondary operations.\n"
+            "Profit after tax derived strictly and solely from primary, core business operations, excluding non-operating investment income, treasury gains/losses, dividend income, or secondary segments.\n"
             "DISCRIMINATOR RULES:\n"
-            "- VALUE TYPE: Absolute Currency at the bottom-line / earnings level (NEVER a margin, NEVER operating-profit level, NEVER per-share).\n"
-            "- BASIS: Core/Underlying — the printed label MUST literally contain 'Core' or 'Underlying' attached to Earnings / PAT / Profit / Net Income.\n"
-            "- NEVER MAP TO THIS BUCKET: 'Adjusted X' / 'Normalized X' / 'Recurring X' (route by the literal qualifier word — each is its own bucket); plain Net Income / Reported PAT (statutory); EBITDA (operating cash-flow proxy, not bottom-line); 'Core Operating Profit' (operating-level, separate bucket); 'Core Margin' / 'Base Business Margin' (percentages, separate)."
+            "- VALUE TYPE: Absolute Currency at the bottom-line post-tax earnings level (`PAT / Net Income` — NEVER a margin percentage, NEVER operating-profit/EBIT level, NEVER per-share).\n"
+            "- BASIS: Core/Underlying — the printed label MUST literally contain 'Core' or 'Underlying' attached to Earnings / PAT / Profit / Net Income, OR represent statutory `PAT from core operations`.\n"
+            "- NEVER MAP TO THIS BUCKET: 'Adjusted X' / 'Normalized X' / 'Recurring X' (route by exact qualifier — each is its own bucket); plain Net Income / Reported PAT (statutory unadjusted); EBITDA; 'Core Operating Profit' / 'Core EBIT' (operating-level, separate bucket); pre-tax 'Core PBT'; Core Margin."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP ACCOUNTING & SCOPE VERIFICATION:\n"
+            "1. STEP 1 (🚨 BOTTOM-LINE POST-TAX VERIFICATION - CRITICAL): ACTIVATE KNOWLEDGE of Ind AS Schedule III. You are evaluating Core Earnings (`Core PAT / Core Net Income`). Confirm that the candidate represents bottom-line profit AFTER subtracting both Depreciation, Finance Costs (`Interest`), and Income Tax! If the candidate is labeled 'Core Operating Profit', 'Core EBIT', 'Underlying Operating Profit', or 'Core PBT / Underlying Profit Before Tax', you MUST STRICTLY REJECT IT!\n"
+            "2. STEP 2 (PROOF OF NON-OPERATING / TREASURY EXCLUSION): ACTIVATE KNOWLEDGE of Schedule III Note 26/29. Confirm that the figure excludes non-operating income (`Note 26/29 Other Income`), treasury investment gains/losses (`Ind AS 109 fair value changes`), or one-off capital gains on property/investments.\n"
+            "3. STEP 3 (DUAL-SCOPE ENFORCEMENT): For Consolidated scope, select group-level Core PAT attributable to shareholders. Strictly reject standalone parent 'Core PAT excluding dividend from subsidiaries' or Note 38/54 segment core profit."
         ),
     },
     {
         "name": "Recurring Earnings",
         "type": "Currency",
-        "accept": ["Recurring Earnings", "Recurring PAT", "Recurring Profit", "Recurring Net Income"],
-        "reject": ["Adjusted Earnings", "Normalized Earnings", "Core Earnings", "Implied Earnings", "Forecasted Earnings", "Projected Earnings", "Net Profit", "Net Income", "Reported PAT"],
+        "accept": [
+            "Recurring Earnings", "Recurring PAT", "Recurring Profit", "Recurring Net Income", 
+            "Recurring Net Profit", "Recurring PAT attributable to equity holders", 
+            "Net Profit from recurring operations", "PAT from recurring operations", 
+            "Recurring Net Income (Non-GAAP)"
+        ],
+        "reject": [
+            "Adjusted Earnings", "Normalized Earnings", "Core Earnings", "Implied Earnings", 
+            "Forecasted Earnings", "Projected Earnings", "Net Profit", "Net Income", "Reported PAT", 
+            "Recurring Operating Profit", "Recurring EBIT", "Recurring EBITDA", "Recurring PBT", 
+            "Recurring Profit Before Tax", "Profit from continuing operations (if exceptional items present)", 
+            "Recurring Segment Profit"
+        ],
         "definition": (
-            "Earnings that are expected to repeat in future periods, strictly excluding non-recurring windfalls or losses.\n"
+            "Earnings expected to repeat reliably in future periods, strictly excluding non-recurring windfalls, exceptional gains/losses, or one-off accounting impacts.\n"
             "DISCRIMINATOR RULES:\n"
-            "- VALUE TYPE: Absolute Currency (NEVER a percentage, NEVER per-share).\n"
-            "- BASIS: Recurring — the printed label MUST literally contain 'Recurring' attached to Earnings / PAT / Profit / Net Income.\n"
-            "- NEVER MAP TO THIS BUCKET: 'Adjusted X' / 'Normalized X' / 'Core X' (separate buckets — match the literal qualifier on the page); forecasted/implied/projected earnings (forward-looking, not actual); plain Net Profit / Reported PAT (statutory)."
+            "- VALUE TYPE: Absolute Currency at the bottom-line post-tax level (`PAT / Net Income` — NEVER a percentage, NEVER per-share, NEVER pre-tax).\n"
+            "- BASIS: Recurring — the printed label MUST literally contain 'Recurring' attached to Earnings / PAT / Profit / Net Income, OR represent profit after tax explicitly adjusted to eliminate non-recurring items.\n"
+            "- NEVER MAP TO THIS BUCKET: 'Adjusted X' / 'Normalized X' / 'Core X' (separate buckets — match literal qualifier); forecasted/implied/projected earnings (forward-looking estimates); plain Net Profit / Reported PAT (statutory); 'Profit from continuing operations' if statutory Exceptional Items exist on the P&L; operating-level 'Recurring EBIT/EBITDA'."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP ACCOUNTING & SCOPE VERIFICATION:\n"
+            "1. STEP 1 (🚨 CONTINUING OPERATIONS VS. RECURRING EARNINGS FIREWALL - CRITICAL): ACTIVATE KNOWLEDGE of Ind AS 1 (Presentation of Financial Statements). Do NOT blindly select statutory 'Profit / (loss) from continuing operations' from the Statement of Profit and Loss! Check if the P&L reports any 'Exceptional Items' (`Note 33/34`). If Exceptional Items != 0, statutory profit from continuing operations still includes those non-recurring items and MUST BE STRICTLY REJECTED unless management presents a specific table adjusting them out to show 'Recurring PAT'!\n"
+            "2. STEP 2 (POST-TAX & POST-INTEREST PROOF): Confirm the figure represents bottom-line profit after subtracting both Finance Costs and Income Tax. Reject pre-tax 'Recurring PBT' or 'Recurring Operating Profit'.\n"
+            "3. STEP 3 (ACTUALS VS. PROJECTIONS): Strictly reject forward-looking guidance, projected, or implied earnings. Must represent actual historical recurring profit for the target FY.\n"
+            "4. STEP 4 (DUAL-SCOPE ENFORCEMENT): For Consolidated scope, select group-level Recurring PAT. Reject Standalone parent or segment sub-slices."
         ),
     },
     {
@@ -130,49 +183,83 @@ METRIC_METADATA: list[MetricDef] = [
     {
         "name": "Normalized EPS",
         "type": "Currency",
-        "accept": ["Normalized EPS", "Normalized Earnings Per Share", "Normalized Diluted EPS"],
-        "reject": ["Reported EPS", "Basic EPS", "Diluted EPS", "Adjusted EPS", "Cash EPS", "Normalized Earnings", "Normalized PAT"],
+        "accept": [
+            "Normalized EPS", "Normalized Earnings Per Share", "Normalized Diluted EPS", 
+            "Normalized Basic EPS", "EPS (Normalized)", "Normalized EPS (diluted)", 
+            "Normalized Earnings Per Share (Basic)", "Normalized EPS excluding exceptional items", 
+            "EPS before exceptional items (diluted)", "Underlying Diluted EPS", "Core Diluted EPS"
+        ],
+        "reject": [
+            "Reported EPS", "Basic EPS", "Diluted EPS", "Adjusted EPS", "Adjusted Diluted EPS", 
+            "Cash EPS", "CEPS", "Normalized Earnings", "Normalized PAT", "Normalized Net Income", 
+            "Segment EPS", "Dividend Per Share", "Book Value Per Share"
+        ],
         "definition": (
-            "EPS based on normalized earnings to provide a comparable baseline across reporting periods.\n"
+            "Earnings Per Share calculated using Normalized Earnings (`PAT before one-off exceptional items net of tax`) divided by the weighted-average number of equity shares, providing a comparable per-share baseline across reporting periods.\n"
             "DISCRIMINATOR RULES:\n"
-            "- VALUE TYPE: Per-Share Currency (a small Rs/USD figure per share — NEVER a total company figure).\n"
-            "- BASIS: Normalized — the printed label MUST literally contain 'Normalized' attached to EPS / Earnings Per Share.\n"
-            "- NEVER MAP TO THIS BUCKET: Adjusted EPS / Basic EPS / Diluted EPS / Reported EPS (each its own bucket — match the literal qualifier); Normalized Earnings (absolute total, not per-share)."
+            "- VALUE TYPE: Per-Share Currency (a small Rs/USD figure per share — typically single or double digits; NEVER a total company figure in Crores/Millions).\n"
+            "- BASIS: Normalized — the printed label MUST literally contain 'Normalized' / 'Underlying' attached to EPS / Earnings Per Share, OR represent `EPS before exceptional items` derived from tax-effected normalized earnings.\n"
+            "- NEVER MAP TO THIS BUCKET: Adjusted EPS (`→ Adjusted EPS` — match exact qualifier); Basic / Diluted EPS (`statutory unadjusted Ind AS 33 figures`); Normalized Earnings (`total absolute company profit`); Cash EPS (`[PAT + D&A] / Shares`)."
         ),
         "layer2_rules": (
-            "MANDATORY STEP-BY-STEP VERIFICATION:\n"
-            "1. STEP 1 (PER-SHARE VALUE CHECK): Must be a per-share currency value, never a total company earnings figure.\n"
-            "2. STEP 2 (NORMALIZATION PROOF): Must explicitly carry the 'Normalized' label or represent EPS derived from normalized earnings."
+            "MANDATORY STEP-BY-STEP ACCOUNTING & SCOPE VERIFICATION:\n"
+            "1. STEP 1 (PER-SHARE VALUE CHECK): Confirm that the candidate is a per-share currency figure (e.g., `Rs. 45.20 per share`), NEVER a total company earnings aggregate in Crores/Lakhs/Millions!\n"
+            "2. STEP 2 (NORMALIZATION & TAX PROOF): ACTIVATE KNOWLEDGE of Ind AS 33. Confirm that the figure explicitly adjusts statutory Basic or Diluted EPS for one-time, non-recurring, or exceptional items net of tax. Do NOT grab statutory unadjusted Basic EPS or Diluted EPS from Note 36/37!\n"
+            "3. STEP 3 (BASIC VS. DILUTED HIERARCHY): If both Normalized Basic EPS and Normalized Diluted EPS are harvested for the target scope, strictly prefer **Normalized Diluted EPS** (`or Normalized Basic EPS if Diluted is not reported`).\n"
+            "4. STEP 4 (DUAL-SCOPE ENFORCEMENT): For Consolidated scope, verify that the per-share figure is derived from Consolidated Normalized Earnings divided by Consolidated weighted-average shares. Strictly reject Standalone parent Normalized EPS."
         ),
     },
     {
         "name": "GAAP One-time Adjustment",
         "type": "Currency",
-        "accept": ["GAAP one-time adjustment", "One-time GAAP adjustment", "Exceptional GAAP adjustment", "Non-recurring GAAP item (with numeric value)"],
-        "reject": ["Narrative-only descriptions", "Generic exceptional items (no GAAP context)", "Ongoing/recurring adjustments", "GAAP Adjusted (the full adjusted figure)", "Adjusted Earnings"],
+        "accept": ["GAAP one-time adjustment", "One-time GAAP adjustment", "Exceptional GAAP adjustment", "Non-recurring GAAP item (with numeric value)", "US GAAP reconciliation adjustment", "Ind AS transition adjustment", "IFRS reconciliation impact"],
+        "reject": ["Narrative-only descriptions", "Generic exceptional items (no GAAP context)", "Standard P&L Exceptional Items (without reconciliation bridge)", "Ongoing/recurring adjustments", "GAAP Adjusted (the full adjusted figure)", "Adjusted Earnings"],
         "definition": (
-            "Specific numerical adjustments made to reconcile statutory figures to a standardized GAAP presentation.\n"
-            "DISCRIMINATOR RULES:\n"
+            "Explicit numerical adjustments made inside a formal GAAP / Ind AS / IFRS accounting transition reconciliation bridge, accounting policy differential schedule, or management Non-GAAP normalization table.\n"
+            "DISCRIMINATOR RULES (`STATUTORY RECONCILIATION VS. REGULAR P&L EXCEPTIONAL ITEMS`):\n"
             "- VALUE TYPE: Absolute Currency adjustment amount with an explicit numeric value (NEVER a narrative-only description).\n"
-            "- BASIS: A single named GAAP reconciliation item — one-time / exceptional in nature.\n"
-            "- NEVER MAP TO THIS BUCKET: generic 'exceptional items' without a GAAP-anchor label; full Adjusted Earnings / Adjusted EBITDA aggregates; ongoing recurring adjustments; the GAAP Adjusted post-reconciliation total (→ GAAP Adjusted)."
+            "- BASIS: Must explicitly state 'GAAP' or come from a formal 'Non-GAAP / US GAAP / Ind AS / IFRS Reconciliation Schedule' — one-time / exceptional in nature.\n"
+            "- NEVER MAP TO THIS BUCKET: Standard 'Exceptional Items' on the face of the audited Ind AS / IFRS Statement of Profit & Loss (Ind AS 1 line items like impairment, VRS, or divestment gain belong to operating/PBT reporting unless presented inside an explicit GAAP reconciliation bridge); full Adjusted Earnings / Adjusted EBITDA aggregates; ongoing recurring adjustments; the GAAP Adjusted post-reconciliation total (→ GAAP Adjusted)."
         ),
         "layer2_rules": (
-            "EVIDENCE OF ADJUSTMENT REQUIREMENT: You are evaluating GAAP One-time Adjustment. The candidate MUST explicitly represent an exceptional, extraordinary, or non-recurring adjustment (e.g., foreign exchange losses, impairment, vessel sales, restructuring). If both Exceptional Items and Extraordinary Items are disclosed on the face of the P&L or in notes, evaluate which is the primary statutory one-time adjustment or if Note disclosures explain their nature.\n"
+            "EVIDENCE OF STATUTORY GAAP ADJUSTMENT / RECONCILIATION REQUIREMENT: You are evaluating GAAP One-time Adjustment. The candidate MUST explicitly contain the wording 'GAAP' (or come from a formal Non-GAAP / US GAAP / IFRS / Ind AS Reconciliation Table or transition bridge). STRICTLY REJECT routine P&L 'Exceptional Items' or statutory non-recurring operating expenses unless the company explicitly presents them as part of a formal GAAP accounting reconciliation bridge or management normalization table.\n"
             "PROOF OF EXCLUSIONS: Do not select regular recurring operating expenses or statutory depreciation."
         ),
     },
     {
         "name": "GAAP Adjusted",
         "type": "Currency",
-        "accept": ["GAAP Pro-forma", "GAAP Normalized", "GAAP Adjusted", "GAAP-Adjusted Earnings"],
-        "reject": ["Non-GAAP metrics", "Non-GAAP Earnings", "Plain Adjusted Earnings (no GAAP anchor)", "GAAP One-time Adjustment (a component, not the total)"],
+        "accept": [
+            "GAAP Pro-forma", "GAAP Normalized", "GAAP Adjusted", "GAAP-Adjusted Earnings", 
+            "Non-GAAP Adjusted Net Income (reconciled)", "Adjusted US GAAP Net Income", 
+            "Adjusted Ind AS Net Profit", "Ind AS Adjusted Net Income", "Adjusted Ind AS PAT", 
+            "Adjusted IFRS Net Income", "Adjusted IFRS Profit for the period", 
+            "Pro-forma Ind AS Net Profit", "Ind AS Pro-forma Net Income", "Adjusted US GAAP Net Profit", 
+            "Reconciled GAAP Net Income"
+        ],
+        "reject": [
+            "Non-GAAP metrics (unreconciled)", "Non-GAAP Earnings (without reconciliation table)", 
+            "Plain Adjusted Earnings (no GAAP anchor)", "Adjusted PAT (unreconciled highlight)", 
+            "GAAP One-time Adjustment", "Ind AS transition adjustment", "IFRS reconciliation impact", 
+            "Statutory Ind AS Net Profit", "Reported US GAAP Net Income", "Reported IFRS Net Income", 
+            "GAAP Adjusted EBITDA", "Ind AS Adjusted EBITDA", "Segment GAAP Adjusted Net Income"
+        ],
         "definition": (
-            "Financial figures adjusted within the bounds of GAAP principles rather than using internal management metrics.\n"
+            "The final post-reconciliation adjusted bottom-line profit figure (`Adjusted Ind AS Net Profit / Adjusted US GAAP Net Income / Adjusted IFRS Net Income`) presented inside a formal statutory GAAP / Non-GAAP / Ind AS / IFRS reconciliation schedule, clearly bridging statutory reported profit to adjusted pro-forma profit.\n"
             "DISCRIMINATOR RULES:\n"
-            "- VALUE TYPE: Absolute Currency post-reconciliation figure presented as 'GAAP-Adjusted' / 'GAAP Pro-forma' / 'GAAP Normalized'.\n"
-            "- BASIS: GAAP-anchored adjustment — explicitly distinct from Non-GAAP management metrics.\n"
-            "- NEVER MAP TO THIS BUCKET: Non-GAAP figures; plain 'Adjusted Earnings' / 'Adjusted EBITDA' without a GAAP-anchor label (those belong to their own buckets); the one-time adjustment component (→ GAAP One-time Adjustment)."
+            "- VALUE TYPE: Absolute Currency post-reconciliation total figure (`a complete bottom-line net income figure — NEVER an individual adjustment delta, NEVER operating-level EBITDA`).\n"
+            "- BASIS: GAAP / Ind AS / IFRS anchored — explicitly presented as 'Adjusted Ind AS Net Profit' / 'Adjusted US GAAP Net Income' / 'GAAP Pro-forma' inside a formal reconciliation schedule.\n"
+            "- NEVER MAP TO THIS BUCKET: Unreconciled figures; plain 'Adjusted Earnings' / 'Adjusted EBITDA' without a GAAP/Ind AS-anchor reconciliation table; the individual line-item adjustment delta (`→ GAAP One-time Adjustment`); raw statutory starting net profit (`Reported Ind AS / US GAAP Net Income`)."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP RECONCILIATION BRIDGE & SCOPE VERIFICATION:\n"
+            "1. STEP 1 (🚨 RECONCILIATION BRIDGE TABLE VERIFICATION - CRITICAL): ACTIVATE KNOWLEDGE of SEC Form 20-F / IFRS / Ind AS Transition Reconciliations. You are evaluating GAAP Adjusted. The candidate MUST originate from a formal reconciliation bridge table (`Reconciliation of Statutory Ind AS/IFRS Net Profit to Adjusted Non-GAAP Net Profit`). Inspect the table rows:\n"
+            "   - DO NOT grab the top starting row (`Statutory Reported Ind AS / US GAAP Net Income`)!\n"
+            "   - DO NOT grab the middle adjustment rows (`e.g., Stock-based compensation +Rs 200 Cr`). Those individual adjustment amounts belong strictly to **GAAP One-time Adjustment**!\n"
+            "   - You MUST select the **final ending row** of the reconciliation bridge (`Adjusted Ind AS Net Profit / Non-GAAP Adjusted Net Income reconciled to GAAP / Pro-forma IFRS Net Income`).\n"
+            "2. STEP 2 (STATUTORY ANCHOR PROOF): Confirm that the label explicitly anchors to GAAP, Ind AS, or IFRS. Reject plain 'Adjusted Net Profit' from narrative PR callouts lacking a reconciliation schedule.\n"
+            "3. STEP 3 (BOTTOM-LINE PAT PROOF): Confirm the post-reconciliation figure is at the Net Income / PAT level after tax. Reject post-reconciliation 'GAAP Adjusted EBITDA' or 'Ind AS Adjusted Operating Profit'.\n"
+            "4. STEP 4 (DUAL-SCOPE ENFORCEMENT): For Consolidated scope, select group-level Adjusted Ind AS / US GAAP Net Income from the Consolidated reconciliation schedule. Strictly reject Standalone parent reconciliation totals."
         ),
     },
     {
@@ -220,21 +307,34 @@ METRIC_METADATA: list[MetricDef] = [
     {
         "name": "Adjusted EBIT",
         "type": "Currency",
-        "accept": ["Adjusted EBIT", "Normalized EBIT", "Underlying EBIT", "EBIT before exceptional items", "Pro-forma EBIT", "Adjusted Operating EBIT"],
-        "reject": ["Reported EBIT", "plain EBIT", "PBIT (plain)", "EBITDA", "Adjusted EBITDA", "Adjusted EBIT Margin", "Adjusted Operating Profit Margin", "Segment EBIT", "before Depreciation", "Profit before Interest, Depreciation", "Profit before Finance Costs, Depreciation", "before tax", "Profit before tax", "PBT", "before exceptional and extraordinary items and tax", "Profit/(Loss) before exceptional and extraordinary items and tax"],
+        "accept": [
+            "Adjusted EBIT", "Normalized EBIT", "Underlying EBIT", "EBIT before exceptional items", 
+            "Pro-forma EBIT", "Adjusted Operating EBIT", "Adjusted PBIT", "Adjusted Profit before interest and tax", 
+            "Adjusted Operating Profit", "Normalized PBIT", "Underlying PBIT", "Operating Profit before exceptional items", 
+            "PBIT before exceptional items", "Profit before finance costs, tax and exceptional items", 
+            "Adjusted Operating Income"
+        ],
+        "reject": [
+            "Reported EBIT", "plain EBIT", "PBIT (plain)", "EBITDA", "Adjusted EBITDA", "Adjusted EBIT Margin", 
+            "Adjusted Operating Profit Margin", "Adjusted PBIT Margin", "Segment EBIT", "before Depreciation", 
+            "Profit before Interest, Depreciation", "Profit before Finance Costs, Depreciation", "before tax", 
+            "Profit before tax", "PBT", "before exceptional and extraordinary items and tax", 
+            "Profit/(loss) before exceptional items and tax", "Profit before exceptional items and tax", "Segment Adjusted EBIT"
+        ],
         "definition": (
-            "EBIT adjusted for non-recurring operational items to show the 'clean' operating performance.\n"
+            "EBIT (`Operating Profit / PBIT`) explicitly adjusted for non-recurring operational items, restructuring charges, or one-off exceptional items to show 'clean' operating performance.\n"
             "DISCRIMINATOR RULES:\n"
-            "- VALUE TYPE: Absolute Currency (NEVER a percentage / margin).\n"
-            "- BASIS: Adjusted/Normalized — the printed label MUST literally contain 'Adjusted' / 'Normalized' / 'Underlying' / 'Pro-forma' / 'before exceptional items' alongside 'EBIT'.\n"
-            "- NEVER MAP TO THIS BUCKET: plain/Reported EBIT (→ EBIT); EBITDA / Adjusted EBITDA (the 'D' and 'A' matter); EBIT Margin or Adjusted EBIT Margin; segment-level EBIT; any line item where Depreciation has NOT been subtracted."
+            "- VALUE TYPE: Absolute Currency at the operating level (NEVER a percentage / margin, NEVER pre-tax PBT, NEVER post-tax PAT).\n"
+            "- BASIS: Adjusted/Normalized — the printed label MUST contain 'Adjusted' / 'Normalized' / 'Underlying' alongside EBIT / PBIT / Operating Profit, OR represent statutory `Profit before finance costs, tax and exceptional items`.\n"
+            "- NEVER MAP TO THIS BUCKET: plain/Reported EBIT (`→ EBIT`); EBITDA / Adjusted EBITDA (`the letter 'D' matters — Depreciation MUST be subtracted in EBIT`); Adjusted EBIT Margin; statutory PBT line `'Profit before exceptional items and tax'` (`Schedule III trap — Interest is already subtracted`); Segment Adjusted EBIT."
         ),
         "layer2_rules": (
-            "MANDATORY STEP-BY-STEP VERIFICATION & DEPRECIATION/INTEREST FIREWALL:\n"
-            "1. STEP 1 (🚨 DEPRECIATION EXCLUSION FIREWALL - CRITICAL): You MUST check if Depreciation has been subtracted! If the candidate label literally says 'before Depreciation' or 'before... Depreciation' (such as 'Profit before Interest, Depreciation & Exceptional Items'), Depreciation has NOT been subtracted! That represents EBITDA or Adjusted EBITDA, NEVER Adjusted EBIT! You MUST STRICTLY REJECT IT!\n"
-            "2. STEP 2 (🚨 INTEREST EXCLUSION FIREWALL - CRITICAL): You MUST check if Interest (Finance Costs) has been subtracted! If the candidate label says 'before tax' or 'Profit before tax' (such as 'Profit/(Loss) before exceptional items and tax' or 'Profit before tax' from an AUDITED_TABLE), Interest has ALREADY been subtracted! That represents PBT/EBT, NEVER EBIT or Adjusted EBIT! You MUST STRICTLY REJECT IT!\n"
-            "3. STEP 3 (EXCEPTIONAL ADJUSTMENT PROOF): You are evaluating Adjusted EBIT. The candidate MUST explicitly adjust for unusual, one-time, or exceptional items.\n"
-            "4. STEP 4 (MATHEMATICAL IDENTITY CHECK): Confirm that Adjusted EBIT is numerically lower than EBITDA by the statutory depreciation amount ($EBIT < EBITDA$). Do NOT select Consolidated PBT or EBT!"
+            "MANDATORY STEP-BY-STEP ACCOUNTING & DEPRECIATION/INTEREST FIREWALL:\n"
+            "1. STEP 1 (🚨 DEPRECIATION EXCLUSION FIREWALL - CRITICAL): You MUST check if Depreciation and Amortization have been subtracted! If the candidate label literally says 'before Depreciation', 'before D&A', or 'Profit before finance costs, depreciation and exceptional items', Depreciation has NOT been subtracted! That represents EBITDA / Adjusted EBITDA, NEVER Adjusted EBIT (`PBIT`). STRICTLY REJECT IT!\n"
+            "2. STEP 2 (🚨 SCHEDULE III INTEREST TRAP FIREWALL - CRITICAL): ACTIVATE KNOWLEDGE of Indian Companies Act Schedule III (Division II Ind AS P&L structure). You MUST check if Finance Costs (`Interest`) have been subtracted! In an audited Schedule III P&L Statement, the line item titled `'Profit / (loss) before exceptional items and tax'` (`or 'Profit before tax'`) appears AFTER Finance Costs have already been deducted! That represents PBT / EBT before exceptional items, NEVER Adjusted EBIT! For a candidate to be Adjusted EBIT (`Adjusted PBIT`), it MUST explicitly state `'before finance costs'` (`e.g., 'Profit before finance costs, tax and exceptional items'`) OR verify that Finance Costs have NOT been deducted yet. STRICTLY REJECT line items where Interest has been deducted!\n"
+            "3. STEP 3 (EXCEPTIONAL ADJUSTMENT PROOF): Confirm the figure explicitly removes/adjusts operational one-off exceptional items (`Note 33/34`). Do not grab plain unadjusted EBIT or PBIT.\n"
+            "4. STEP 4 (MATHEMATICAL IDENTITY CHECK): Confirm that Adjusted EBIT is numerically lower than Adjusted EBITDA by the statutory depreciation amount ($Adjusted EBIT < Adjusted EBITDA$).\n"
+            "5. STEP 5 (DUAL-SCOPE ENFORCEMENT): For Consolidated scope, select group-level Adjusted PBIT. Strictly reject Note 38/54 Segment Adjusted EBIT."
         ),
     },
     {
@@ -260,19 +360,30 @@ METRIC_METADATA: list[MetricDef] = [
     {
         "name": "Core Operating Profit",
         "type": "Currency",
-        "accept": ["Core Operating Profit", "Underlying Operating Profit"],
-        "reject": ["Segment Result", "Operating Profit (plain)", "EBIT", "EBITDA", "Adjusted EBIT", "Core Earnings", "Core Margin", "Base Business Margin"],
+        "accept": [
+            "Core Operating Profit", "Underlying Operating Profit", "Core Operating Earnings", 
+            "Core PBIT", "Core EBIT", "Underlying PBIT", "Underlying EBIT", 
+            "Operating Profit from core operations", "Operating profit ex-other operating income", 
+            "Core PPOP", "Core Operating Profit before provisions", "Operating Profit before provisions excluding treasury gains"
+        ],
+        "reject": [
+            "Segment Result", "Operating Profit (plain)", "EBIT", "EBITDA", "Adjusted EBIT", 
+            "Core Earnings", "Core PAT", "Core Net Income", "Underlying PAT", "Core EBITDA", 
+            "Core Operating EBITDA", "Core Margin", "Base Business Margin", "Core Operating Margin", 
+            "PPOP (if treasury included)", "Segment Core Operating Profit"
+        ],
         "definition": (
-            "The profit from primary operations only, excluding group-level adjustments or non-core business segments.\n"
+            "Profit strictly from primary operating activities (`Core PBIT / Core EBIT`), excluding both group corporate adjustments/non-operating treasury gains and non-core secondary business units.\n"
             "DISCRIMINATOR RULES:\n"
-            "- VALUE TYPE: Absolute Currency at the operating-profit level (NEVER a margin, NEVER a bottom-line earnings figure).\n"
-            "- BASIS: Core — the printed label MUST literally contain 'Core Operating' or 'Underlying Operating'.\n"
-            "- NEVER MAP TO THIS BUCKET: plain Operating Profit (→ EBIT); EBITDA (different aggregate); Adjusted EBIT (→ Adjusted EBIT — different qualifier); 'Core Earnings' (bottom-line, separate bucket); Segment Result (segment-level, out of scope); any percentage margin including Core Margin / Base Business Margin."
+            "- VALUE TYPE: Absolute Currency at the operating-profit level (`after D&A, but before Interest and Tax` — NEVER a margin percentage, NEVER bottom-line PAT).\n"
+            "- BASIS: Core/Underlying — the printed label MUST literally contain 'Core Operating' / 'Underlying Operating' / 'Core PBIT' / 'Core EBIT', OR represent operating profit explicitly adjusted to exclude non-operating treasury/other income (`Core PPOP in banks`).\n"
+            "- NEVER MAP TO THIS BUCKET: plain Operating Profit (`→ EBIT`); EBITDA / Core EBITDA (`before D&A`); Adjusted EBIT (`different qualifier semantics`); 'Core Earnings / Core PAT' (`→ bottom-line post-tax, separate bucket`); Segment Result (`Note 38 out of scope`); Core Margin."
         ),
         "layer2_rules": (
-            "MANDATORY STEP-BY-STEP VERIFICATION:\n"
-            "1. STEP 1 (SCOPE & DEFINITION CHECK): You are evaluating Core Operating Profit (profit from primary operations only). Do not grab Segment Result or bottom-line Net Profit.\n"
-            "2. STEP 2 (VALUE TYPE): Must be an absolute currency figure at the operating level, never a percentage or margin."
+            "MANDATORY STEP-BY-STEP ACCOUNTING & SCOPE VERIFICATION:\n"
+            "1. STEP 1 (🚨 OPERATING LEVEL VS. BOTTOM-LINE PAT FIREWALL - CRITICAL): You are evaluating Core Operating Profit (`Core EBIT / Core PBIT`). Confirm that Depreciation & Amortization HAVE been subtracted, but Finance Costs (`Interest`) and Income Tax HAVE NOT been subtracted! If the candidate is post-tax (`Core PAT / Core Earnings`) or pre-D&A (`Core EBITDA`), STRICTLY REJECT IT!\n"
+            "2. STEP 2 (EXCLUSION OF NON-OPERATING & TREASURY INCOME): ACTIVATE KNOWLEDGE of RBI Master Directions for Banks/NBFCs and Schedule III Note 26/29. Confirm that the figure excludes non-operating income (`Note 26/29 Other Income`), one-off capital gains, and investment income. For BANKS & NBFCs (`HDFC Bank, ICICI Bank`), Core Operating Profit is defined as **PPOP excluding Treasury Income** (`Core PPOP`). If the candidate is raw PPOP that includes treasury trading gains, strictly reject it unless treasury gains are excluded!\n"
+            "3. STEP 3 (DUAL-SCOPE ENFORCEMENT): For Consolidated scope, select group-level Core Operating Profit. Strictly reject Note 38/54 Segment Results (`e.g., Retail Banking segment operating profit`)."
         ),
     },
     {
@@ -316,71 +427,132 @@ METRIC_METADATA: list[MetricDef] = [
     {
         "name": "Base Business Margin",
         "type": "Percentage",
-        "accept": ["Base Business Margin", "Core Margin", "Base Margin", "Core Business Margin"],
-        "reject": ["Gross Margin", "EBITDA Margin", "EBIT Margin", "Operating Margin", "Net Margin", "Net Profit Margin", "Core Earnings", "Core Operating Profit", "Segment Margin"],
+        "accept": [
+            "Base Business Margin", "Core Margin", "Base Margin", "Core Business Margin", 
+            "Margin of base business", "Legacy business margin", "Core operations margin"
+        ],
+        "reject": [
+            "Gross Margin", "EBITDA Margin", "EBIT Margin", "Operating Margin", "Net Margin", 
+            "Net Profit Margin", "Core Earnings", "Core Operating Profit", "Segment Margin (unless specifically legacy core)", 
+            "Consolidated Margin", "Group Margin"
+        ],
         "definition": (
-            "Profit margin specifically for the legacy or core business units, excluding new acquisitions or hyper-growth segments.\n"
+            "Profit margin specifically for the legacy or core business units of a company, intentionally excluding new acquisitions, digital incubations, or hyper-growth non-core segments.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Percentage / Margin Ratio (NEVER absolute currency).\n"
-            "- BASIS: Reported margin for the core/legacy business — distinct from group-level or segment margins.\n"
-            "- NEVER MAP TO THIS BUCKET: Gross Margin / EBITDA Margin / EBIT Margin / Net Margin (each is its own concept); 'Core Earnings' / 'Core Operating Profit' (absolute currency, not margin); segment-level margins (out of scope per the SEGMENT-QUALIFIED LABELS rule)."
+            "- BASIS: Reported margin specifically tracking the core/legacy/base business — distinct from the overall blended group-level margin.\n"
+            "- NEVER MAP TO THIS BUCKET: Overall Group EBITDA Margin / EBIT Margin (`those blend base + new segments`); absolute currency Core Earnings; generic segment margins."
         ),
         "layer2_rules": (
-            "SCOPE & DEFINITION CHECK: You are evaluating Base Business Margin (the profitability margin of the core/legacy business units, excluding new acquisitions, joint ventures, or hyper-growth non-core segments).\n"
-            "1. DIFFERENTIATION: Do not simply grab group-level EBITDA Margin, EBIT Margin, or Gross Margin. The candidate MUST explicitly refer to the margin of the 'Base Business', 'Core Business', or legacy operations.\n"
-            "2. VALUE TYPE: Must be a percentage (%) margin, never an absolute currency figure."
+            "MANDATORY STEP-BY-STEP SCOPE & SEGMENT EXEMPTION VERIFICATION:\n"
+            "1. STEP 1 (🚨 IND AS 108 SEGMENT REPORTING EXEMPTION - CRITICAL): ACTIVATE KNOWLEDGE of Ind AS 108 Operating Segments. Unlike group-level metrics (`like EBITDA Margin`) where Note 108 Segment Reporting is BANNED, Base Business Margin explicitly measures mature/legacy segments! Therefore, you ARE EXPLICITLY ALLOWED to select candidates from Note 108 Segment Reporting IF AND ONLY IF the segment represents the Base/Core/Established Business of the company (`e.g., ITC Cigarettes, Airtel India Mobile Services`).\n"
+            "2. STEP 2 (DIFFERENTIATION FROM GROUP TOTALS): Do not simply grab the Consolidated Group Operating Margin. The candidate MUST explicitly refer to the margin of the 'Base Business', 'Core Business', or a specific mature legacy operation that management isolates from new ventures.\n"
+            "3. STEP 3 (VALUE TYPE): Must be a percentage (`%`) margin, never an absolute currency figure."
         ),
     },
     {
         "name": "Adjusted ROE",
         "type": "Percentage",
-        "accept": ["Adjusted ROE", "Adjusted Return on Equity", "Normalized ROE", "Underlying ROE"],
-        "reject": ["Reported ROE", "plain ROE", "ROCE", "ROIC", "RONA", "Adjusted ROA", "Return on Equity (no qualifier)", "Net Income", "Total Equity"],
+        "accept": [
+            "Adjusted ROE", "Adjusted Return on Equity", "Normalized ROE", "Underlying ROE", 
+            "Core ROE", "ROE (Adjusted)", "Return on Equity (Normalized)", "ROE before exceptional items", 
+            "Adjusted ROAE", "Adjusted Return on Average Equity"
+        ],
+        "reject": [
+            "Reported ROE", "plain ROE", "ROCE", "ROIC", "RONA", "Adjusted ROA", "Return on Equity (no qualifier)", 
+            "Net Income", "Total Equity", "Average Equity", "Core ROA"
+        ],
         "definition": (
-            "Return on Equity calculated using adjusted net income to show management's efficiency in generating profit from equity.\n"
+            "Return on Equity mathematically calculated using adjusted/normalized net income in the numerator, demonstrating the true recurring return generated on shareholders' equity.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Percentage / Return Ratio (NEVER absolute currency).\n"
-            "- BASIS: Adjusted/Normalized — the printed label MUST literally contain 'Adjusted' / 'Normalized' / 'Underlying' alongside 'ROE' / 'Return on Equity'.\n"
-            "- NEVER MAP TO THIS BUCKET: plain/Reported ROE (no dedicated bucket — return null per the QUALIFIERS rule); ROCE / ROIC / RONA / Adjusted ROA (each has a different denominator); absolute net income or equity figures."
+            "- BASIS: Adjusted/Normalized — the printed label MUST contain 'Adjusted' / 'Normalized' / 'Underlying' / 'Core' alongside ROE / Return on Equity.\n"
+            "- NEVER MAP TO THIS BUCKET: plain/Reported ROE (`no dedicated bucket — route to null`); ROCE / ROIC (`denominator includes debt`); Adjusted ROA (`denominator is total assets`); absolute currency inputs (`Net Income, Equity`)."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP ACCOUNTING & RATIO VERIFICATION:\n"
+            "1. STEP 1 (🚨 NUMERATOR ADJUSTMENT PROOF - CRITICAL): ACTIVATE KNOWLEDGE of Ratio Analysis. You are evaluating Adjusted ROE. The candidate MUST explicitly be a return ratio where the numerator (`PAT`) has been adjusted for one-time/exceptional items (`e.g., 'ROE using Normalized PAT'`). Do NOT grab statutory unadjusted ROE from the 'Key Financial Ratios' table (Note 40) unless it explicitly carries an 'Adjusted' or 'Normalized' qualifier!\n"
+            "2. STEP 2 (DENOMINATOR VERIFICATION): Confirm the denominator is Equity (`Net Worth / Shareholders' Equity`). Reject ROCE (`Return on Capital Employed` - denominator includes debt) and Adjusted ROA (`denominator is Total Assets`).\n"
+            "3. STEP 3 (DUAL-SCOPE & BANKING ASYMMETRY ENFORCEMENT): ACTIVATE KNOWLEDGE of RBI Banking Consolidation. In large bank conglomerates (`e.g., SBI, ICICI`), Standalone banking ROE is structurally higher than Consolidated Group ROE. If evaluating Consolidated scope, you MUST verify the table header says 'Consolidated'. Do NOT grab the Standalone commercial banking ROE from the Directors' Report summary!"
         ),
     },
     {
         "name": "Adjusted ROA",
         "type": "Percentage",
-        "accept": ["Adjusted ROA", "Adjusted Return on Assets", "Normalized ROA", "Underlying ROA"],
-        "reject": ["Reported ROA", "plain ROA", "RONA", "ROE", "Adjusted ROE", "ROCE", "ROIC", "Return on Assets (no qualifier)", "Net Income", "Total Assets"],
+        "accept": [
+            "Adjusted ROA", "Adjusted Return on Assets", "Normalized ROA", "Underlying ROA", 
+            "Core ROA", "ROA (Adjusted)", "Return on Assets (Normalized)", "ROA before exceptional items", 
+            "Adjusted ROAA", "Adjusted Return on Average Assets"
+        ],
+        "reject": [
+            "Reported ROA", "plain ROA", "RONA", "ROE", "Adjusted ROE", "ROCE", "ROIC", 
+            "Return on Assets (no qualifier)", "Net Income", "Total Assets", "Average Assets"
+        ],
         "definition": (
-            "Return on Assets using adjusted figures to evaluate asset utilization without the noise of one-time charges.\n"
+            "Return on Assets mathematically calculated using adjusted/normalized net income in the numerator, providing a clean measure of asset utilization efficiency without the noise of one-off charges.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Percentage / Return Ratio (NEVER absolute currency).\n"
-            "- BASIS: Adjusted/Normalized — the printed label MUST literally contain 'Adjusted' / 'Normalized' / 'Underlying' alongside 'ROA' / 'Return on Assets'.\n"
-            "- NEVER MAP TO THIS BUCKET: plain/Reported ROA (no dedicated bucket — return null per the QUALIFIERS rule); ROE / Adjusted ROE / RONA / ROCE / ROIC (different denominators); absolute net income or asset figures."
+            "- BASIS: Adjusted/Normalized — the printed label MUST contain 'Adjusted' / 'Normalized' / 'Underlying' / 'Core' alongside ROA / Return on Assets.\n"
+            "- NEVER MAP TO THIS BUCKET: plain/Reported ROA (`statutory unadjusted`); Adjusted ROE / ROCE (`different denominators`); absolute currency inputs (`Net Income, Average Assets`)."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP ACCOUNTING & RATIO VERIFICATION:\n"
+            "1. STEP 1 (🚨 NUMERATOR ADJUSTMENT PROOF - CRITICAL): ACTIVATE KNOWLEDGE of Ratio Analysis. You are evaluating Adjusted ROA. The candidate MUST explicitly be a return ratio where the numerator (`PAT`) has been adjusted for exceptional items. Do NOT grab statutory unadjusted ROA from the 'Key Financial Ratios' table!\n"
+            "2. STEP 2 (DENOMINATOR VERIFICATION): Confirm the denominator is Assets (`Total Assets / Average Assets`). Reject Adjusted ROE (`denominator is Equity`).\n"
+            "3. STEP 3 (INPUT REJECTION): Do NOT grab the absolute currency denominator `'Average Total Assets'` just because it appears in a table calculating ROA.\n"
+            "4. STEP 4 (DUAL-SCOPE & BANKING ASYMMETRY ENFORCEMENT): ACTIVATE KNOWLEDGE of RBI Banking Consolidation. In large bank conglomerates, Standalone commercial banking ROA (`~1.8%`) is completely different from Consolidated Group ROA (`~1.3%`). You MUST rigorously check the table header/chapter (`Standalone vs Consolidated`) to prevent cross-contamination!"
         ),
     },
     {
         "name": "Free Cash Flow (FCF)",
         "type": "Currency",
-        "accept": ["Free Cash Flow", "FCF"],
-        "reject": ["CFO", "Cash from Operations", "Operating Cash Flow", "FCFE", "FCFF", "Funds From Operations", "FFO", "Distributable Cash Flow", "Cash from Investing", "Cash from Financing"],
+        "accept": [
+            "Free Cash Flow", "FCF", "Free Cash Flow (FCF)", "Free cash flow generation", 
+            "Operating Free Cash Flow", "FCF before dividends", "Unlevered Free Cash Flow", 
+            "Levered Free Cash Flow"
+        ],
+        "reject": [
+            "CFO", "Cash from Operations", "Operating Cash Flow", "Net cash generated from operating activities", 
+            "FCFE", "FCFF", "Funds From Operations", "FFO", "Distributable Cash Flow", "Cash from Investing", 
+            "Cash from Financing", "EBITDA minus Capex", "Cash Profit"
+        ],
         "definition": (
-            "Operating cash flow minus capital expenditures (CapEx). Represents cash available for distribution or debt reduction.\n"
+            "The pure cash generated by the business after deducting capital expenditures (`CapEx`) required to maintain or expand its asset base. It represents the cash truly free for debt reduction or shareholder distribution.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (a cash-flow figure).\n"
-            "- BASIS: The specific 'Free Cash Flow' / 'FCF' label — NOT a generic 'cash' line. Look for explicit presentation or reconciliation that isolates FCF for the target period.\n"
-            "- NEVER MAP TO THIS BUCKET: Operating Cash Flow / CFO (broader, pre-CapEx — separate concept); Funds From Operations / FFO (→ FFO); Distributable Cash Flow (→ Distributable Cash Flow); FCFE / FCFF variants (equity vs firm — out of scope here); generic Cash & Cash Equivalents."
+            "- BASIS: The specific 'Free Cash Flow' / 'FCF' label — NEVER a generic 'cash' line and NEVER statutory gross CFO.\n"
+            "- NEVER MAP TO THIS BUCKET: Net cash generated from operating activities / CFO (`Ind AS 7 statutory gross cash flow BEFORE CapEx`); Funds From Operations / FFO (`REIT metric`); Distributable Cash Flow (`MLP/REIT metric`); synthetic approximations like `EBITDA - Capex`."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP ACCOUNTING & MATHEMATICAL VERIFICATION:\n"
+            "1. STEP 1 (🚨 THE CFO VS. FCF FIREWALL - CRITICAL): ACTIVATE KNOWLEDGE of Ind AS 7 Statement of Cash Flows. In India, companies report 'Net cash generated from operating activities' (`CFO`). CFO is strictly BEFORE Capital Expenditures (`CapEx`). Free Cash Flow (FCF) is mathematically defined as CFO MINUS CapEx. If a candidate is simply the raw CFO figure from the Cash Flow Statement, you MUST STRICTLY REJECT IT, even if it appears under a PR heading titled 'Free Cash Flow Generation'!\n"
+            "2. STEP 2 (MATHEMATICAL IDENTITY PROOF): Verify the formula: `FCF = CFO - CapEx`. The FCF candidate MUST be numerically lower than statutory CFO (assuming normal positive CapEx).\n"
+            "3. STEP 3 (EBITDA PROXY EXCLUSION): Strictly reject synthetic analyst approximations like 'EBITDA minus Capex'. FCF must be derived from actual operating cash flow (post working-capital changes and taxes)."
         ),
     },
     {
         "name": "Funds From Operations (FFO)",
         "type": "Currency",
-        "accept": ["Funds From Operations", "FFO"],
-        "reject": ["AFFO", "Adjusted FFO", "Free Cash Flow", "FCF", "Cash from Operations", "CFO", "Distributable Cash Flow", "Operating Cash Flow"],
+        "accept": [
+            "Funds From Operations", "FFO", "Funds from Operations (FFO)", "NAREIT FFO"
+        ],
+        "reject": [
+            "AFFO", "Adjusted FFO", "Free Cash Flow", "FCF", "Cash from Operations", "CFO", 
+            "Net cash generated from operating activities", "Distributable Cash Flow", "Operating Cash Flow", 
+            "NDCF", "Net Distributable Cash Flow"
+        ],
         "definition": (
-            "A measure of cash generated by real estate or investment activities, excluding gains/losses from property sales.\n"
+            "A sector-specific measure of cash generated by Real Estate Investment Trusts (`REITs`) or Infrastructure InvITs, calculated by adding depreciation and amortization to earnings and subtracting any gains on sales of property.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency.\n"
-            "- BASIS: The specific 'Funds From Operations' / 'FFO' label — sector-specific (REITs / investment trusts).\n"
-            "- NEVER MAP TO THIS BUCKET: AFFO / Adjusted FFO (different, downstream metric); Free Cash Flow / FCF (separate); generic Operating Cash Flow / CFO; Distributable Cash Flow."
+            "- BASIS: The specific 'Funds From Operations' / 'FFO' label — strictly a REIT / InvIT / Real Estate sector metric.\n"
+            "- NEVER MAP TO THIS BUCKET: Adjusted FFO / AFFO (`a downstream metric that deducts maintenance CapEx`); Free Cash Flow / FCF; statutory Operating Cash Flow / CFO (`Ind AS 7 metric - includes working capital changes which FFO excludes`); Net Distributable Cash Flow (`NDCF`)."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP ACCOUNTING VERIFICATION:\n"
+            "1. STEP 1 (🚨 FFO VS. NDCF/CFO FIREWALL - CRITICAL): ACTIVATE KNOWLEDGE of SEBI REIT Regulations and NAREIT Guidelines. FFO is a specific non-GAAP earnings metric (`PAT + D&A - Property Gains`). Do NOT confuse FFO with 'Net Distributable Cash Flow' (`NDCF`)! Do NOT confuse FFO with statutory Ind AS 7 'Net cash generated from operating activities' (`CFO`). If the label is NDCF or CFO, STRICTLY REJECT IT!\n"
+            "2. STEP 2 (AFFO EXCLUSION): Confirm the label is FFO, not AFFO (`Adjusted FFO`).\n"
+            "3. STEP 3 (SECTOR RELEVANCE): If the company is a standard manufacturing or IT company (`e.g., Infosys, Tata Steel`), they do NOT report FFO. Return 0 candidates rather than forcing a CFO proxy."
         ),
     },
     {
@@ -430,14 +602,25 @@ METRIC_METADATA: list[MetricDef] = [
     {
         "name": "Constant Currency Revenue",
         "type": "Currency",
-        "accept": ["Constant Currency Revenue", "CC Revenue", "FX-neutral Revenue", "Revenue in constant currency terms"],
-        "reject": ["Reported Revenue", "Total Revenue", "plain Revenue", "Adjusted Revenue", "Constant Currency Revenue Growth", "CC Revenue Growth %", "Organic Revenue"],
+        "accept": [
+            "Constant Currency Revenue", "CC Revenue", "FX-neutral Revenue", "Revenue in constant currency terms"
+        ],
+        "reject": [
+            "Reported Revenue", "Total Revenue", "plain Revenue", "Adjusted Revenue", "Constant Currency Revenue Growth", 
+            "CC Revenue Growth %", "Organic Revenue"
+        ],
         "definition": (
-            "Revenue calculated by eliminating the effect of foreign exchange rate fluctuations.\n"
+            "A non-GAAP revenue metric calculated by translating current period foreign-currency revenues using the exchange rates of the prior comparable period. It demonstrates pure business volume growth by eliminating the artificial inflation/deflation caused by FX rate fluctuations.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (a revenue figure — NEVER a percentage growth rate).\n"
-            "- BASIS: Constant-Currency / FX-neutral — the printed label MUST literally contain 'Constant Currency' / 'CC' / 'FX-neutral' alongside Revenue.\n"
-            "- NEVER MAP TO THIS BUCKET: Reported / Total / plain Revenue (statutory — separate); Adjusted Revenue (management-adjusted, not FX-neutral); Constant Currency Revenue Growth (→ the percentage bucket, NOT this absolute figure)."
+            "- BASIS: Constant-Currency / FX-neutral — the printed label MUST explicitly contain 'Constant Currency' / 'CC' / 'FX-neutral' / 'Fixed Exchange Rate' alongside Revenue.\n"
+            "- NEVER MAP TO THIS BUCKET: Reported / Total / plain Revenue (`statutory — completely separate`); Adjusted Revenue (`usually excludes acquisitions, not FX`); Constant Currency Revenue Growth (`the percentage bucket, NOT this absolute currency bucket`)."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP FX ADJUSTMENT VERIFICATION:\n"
+            "1. STEP 1 (🚨 THE PERCENTAGE VS. CURRENCY FIREWALL - CRITICAL): ACTIVATE KNOWLEDGE of IT Services Reporting (`e.g., Infosys, TCS`). Companies frequently report Constant Currency Revenue Growth (`e.g., '12.5% YoY'`). You are evaluating the absolute currency bucket. If the candidate is a percentage (`%`), STRICTLY REJECT IT!\n"
+            "2. STEP 2 (FX EXPLICIT QUALIFIER CHECK): The table header or text MUST explicitly state 'Constant Currency' or 'FX-neutral'. Do NOT grab statutory consolidated revenue assuming it is CC revenue.\n"
+            "3. STEP 3 (US DOLLAR VS LOCAL CURRENCY AWARENESS): In Indian IT, CC Revenue is often reported in USD millions, while statutory revenue is in INR Crores. Accept the CC Revenue figure regardless of the reporting currency (`USD/EUR/INR`) as long as it has the 'Constant Currency' qualifier."
         ),
     },
     {
@@ -456,43 +639,72 @@ METRIC_METADATA: list[MetricDef] = [
     {
         "name": "Constant Currency Opex",
         "type": "Currency",
-        "accept": ["Constant Currency Opex", "CC Opex", "FX-neutral Opex", "Operating Expenses in constant currency"],
-        "reject": ["Reported Opex", "Total Opex", "Opex Growth %", "Constant Currency Revenue", "Cost of Revenue (no FX qualifier)"],
+        "accept": [
+            "Constant Currency Opex", "CC Opex", "FX-neutral Opex", "Operating Expenses in constant currency"
+        ],
+        "reject": [
+            "Reported Opex", "Total Opex", "Opex Growth %", "Constant Currency Revenue", "Cost of Revenue (no FX qualifier)"
+        ],
         "definition": (
-            "Operating expenses calculated at fixed exchange rates to evaluate cost-management performance.\n"
+            "Operating expenses translated using prior period exchange rates to isolate actual cost-management performance from currency volatility.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (an expense figure — NEVER a percentage).\n"
-            "- BASIS: Constant-Currency / FX-neutral — the printed label MUST literally contain 'Constant Currency' / 'CC' / 'FX-neutral' alongside 'Opex' / 'Operating Expenses'.\n"
-            "- NEVER MAP TO THIS BUCKET: reported / total Opex (no FX qualifier); percentage Opex growth; Constant Currency Revenue (a different P&L line)."
+            "- BASIS: Constant-Currency / FX-neutral — the printed label MUST literally contain 'Constant Currency' / 'CC' / 'FX-neutral' alongside 'Opex' / 'Operating Expenses' / 'Costs'.\n"
+            "- NEVER MAP TO THIS BUCKET: reported / total statutory Opex; percentage CC Opex growth; Constant Currency Revenue."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP FX ADJUSTMENT VERIFICATION:\n"
+            "1. STEP 1 (🚨 THE PERCENTAGE VS. CURRENCY FIREWALL - CRITICAL): If the candidate is a percentage (`%`) representing cost growth, STRICTLY REJECT IT!\n"
+            "2. STEP 2 (FX EXPLICIT QUALIFIER CHECK): The label MUST explicitly state 'Constant Currency' or 'FX-neutral'. Do NOT grab statutory operating expenses.\n"
+            "3. STEP 3 (SCOPE VERIFICATION): Ensure it represents Operating Expenses (`Opex`), not Cost of Goods Sold (`COGS`) or Revenue."
         ),
     },
     {
         "name": "ARPU",
         "type": "Currency",
-        "accept": ["ARPU", "Average Revenue Per User", "Average Revenue Per Subscriber"],
-        "reject": ["ARPPU", "Average Revenue Per Paying User", "Revenue per unit", "Revenue per Employee", "Total Revenue", "Subscriber count"],
+        "accept": [
+            "ARPU", "Average Revenue Per User", "Average Revenue Per Subscriber", "Blended ARPU"
+        ],
+        "reject": [
+            "ARPPU", "Average Revenue Per Paying User", "Revenue per unit", "Revenue per Employee", 
+            "Total Revenue", "Subscriber count"
+        ],
         "definition": (
-            "Average Revenue Per User. A key metric for subscription or telecommunication businesses.\n"
+            "Average Revenue Per User (or Subscriber). A key unit-economic metric for telecommunications (`e.g., Bharti Airtel, Jio`), streaming, or SaaS businesses, calculated by dividing total revenue by the total average user base.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Per-User Currency (a small Rs/USD figure per user/subscriber per period — NEVER a total revenue figure in millions/billions).\n"
-            "- BASIS: Sector-specific (telecom / subscription / SaaS).\n"
-            "- NEVER MAP TO THIS BUCKET: ARPPU (Average Revenue Per Paying User — a stricter cohort); Revenue per Unit / Revenue per Employee (different denominators); total revenue figures; subscriber counts (unit counts, not currency)."
+            "- BASIS: Sector-specific (Telecom / Media / SaaS).\n"
+            "- NEVER MAP TO THIS BUCKET: ARPPU (`Average Revenue Per Paying User` — a stricter cohort that excludes free users); Revenue per Unit / Revenue per Employee; total aggregate revenue figures; raw subscriber counts."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP TELECOM METRIC VERIFICATION:\n"
+            "1. STEP 1 (🚨 ARPPU VS. ARPU FIREWALL - CRITICAL): ACTIVATE KNOWLEDGE of SaaS/Media Unit Economics. ARPU (`Average Revenue Per User`) divides revenue by ALL users (`free + paid`). ARPPU (`Average Revenue Per Paying User`) divides revenue ONLY by paid users. If a company reports BOTH, you MUST NOT grab ARPPU and label it ARPU. Ensure the label specifically says ARPU.\n"
+            "2. STEP 2 (MAGNITUDE CHECK): ARPU is a small per-unit currency figure (`e.g., Rs. 200 per month, $15 per month`). If the candidate is a massive aggregate figure (`e.g., 20,000 Crores`), it is Total Revenue. STRICTLY REJECT IT!\n"
+            "3. STEP 3 (DENOMINATOR CHECK): Do NOT select raw subscriber counts (`e.g., '300 Million Subscribers'`) instead of the currency ARPU."
         ),
     },
     {
         "name": "Collections",
         "type": "Currency",
-        "accept": ["Collections", "Sales Collections", "Cash Collections", "Customer Collections", "Collection Value"],
-        "reject": ["Revenue", "Revenue from Operations", "CFO", "Operating Cash Flow", "Receipts (generic)", "Order Book", "Order Backlog", "Pre-sales", "Bookings"],
+        "accept": [
+            "Collections", "Sales Collections", "Cash Collections", "Customer Collections", "Collection Value"
+        ],
+        "reject": [
+            "Revenue", "Revenue from Operations", "CFO", "Operating Cash Flow", "Receipts (generic)", 
+            "Order Book", "Order Backlog", "Pre-sales", "Bookings"
+        ],
         "definition": (
-            "Actual cash received from customers during the period, distinct from recognized revenue which may be on credit.\n"
+            "The actual cash received from customers during the period. In sectors like Real Estate (where Ind AS 115 revenue recognition is deferred until project completion) or lending, Collections provide the true measure of immediate liquidity and period commercial performance.\n"
             "DISCRIMINATOR RULES:\n"
-            "- VALUE TYPE: Absolute Currency (cash collected in the period).\n"
-            "- BASIS: Sector-specific (real estate / lending / infra) — cash inflows from customers, NOT accrual revenue and NOT CFO.\n"
-            "- NEVER MAP TO THIS BUCKET: recognized Revenue (accrual basis, not cash); generic Operating Cash Flow / CFO (broader); Order Book / Backlog (a stock, not a period flow); Pre-sales / Bookings (contracted but not yet collected — separate buckets)."
+            "- VALUE TYPE: Absolute Currency (gross cash inflow from customers).\n"
+            "- BASIS: Sector-specific (Real Estate / Lending / EPC) — represents raw cash inflow, NOT accounting revenue and NOT net operating cash flow.\n"
+            "- NEVER MAP TO THIS BUCKET: Recognized Revenue (`accrual accounting, non-cash`); generic Operating Cash Flow / CFO (`net of vendor payments and taxes, NOT gross collections`); Pre-sales / Bookings (`contracts signed, but cash not yet collected`)."
         ),
         "layer2_rules": (
-            "ANOMALY PREVENTION RULE: Do NOT grab subsidiary-specific project collections (e.g., Note 39 water project user collections) as group top-line collections. Must represent overall company customer collections."
+            "MANDATORY STEP-BY-STEP REAL ESTATE / INFRA VERIFICATION:\n"
+            "1. STEP 1 (🚨 COLLECTIONS VS. PRE-SALES FIREWALL - CRITICAL): ACTIVATE KNOWLEDGE of Indian Real Estate (`e.g., DLF, Macrotech, Godrej Properties`). Real Estate companies report three distinct metrics: (1) Pre-sales/Bookings (`contracts signed`), (2) Collections (`cash received from clients against those contracts`), (3) Revenue (`accounting revenue recognized on project handover`). You MUST NOT confuse Collections with Pre-sales or Revenue. If the label says 'Pre-sales' or 'Sales Value', STRICTLY REJECT IT for this Collections bucket!\n"
+            "2. STEP 2 (COLLECTIONS VS. CFO FIREWALL): Do NOT confuse gross customer Collections with statutory Ind AS 7 'Net cash generated from operating activities' (`CFO`). CFO subtracts payments to suppliers and taxes. Collections is a gross top-line cash metric. If the label is CFO, STRICTLY REJECT IT!\n"
+            "3. STEP 3 (ANOMALY PREVENTION RULE): Do NOT grab subsidiary-specific project collections (`e.g., Note 39 water project user collections`) as group top-line collections. Must represent overall company customer collections."
         ),
     },
     {
@@ -512,13 +724,21 @@ METRIC_METADATA: list[MetricDef] = [
         "name": "Bookings",
         "type": "Currency",
         "accept": ["Bookings", "Sales Bookings", "Gross Bookings", "Net Bookings", "Contracted Value", "Order Value", "New Order Inflow"],
-        "reject": ["Order Backlog", "Order Book", "Revenue", "Recognized Revenue", "Pre-sales", "Collections"],
+        "reject": [
+            "Order Backlog", "Order Book", "Revenue", "Recognized Revenue", "Pre-sales", "Collections",
+            "Large Deal TCV", "Large deal bookings", "Segment deal TCV", "Segment bookings", "Large deals order intake"
+        ],
         "definition": (
-            "Total value of new contracts or orders secured during the period, indicating future revenue pipeline.\n"
-            "DISCRIMINATOR RULES:\n"
+            "Total aggregate gross value of ALL new customer contracts, purchase orders, or client agreements signed across the entire company during the reporting period (`Order Intake` / `Total Contracted Pipeline`). It represents the full company-wide commercial inflow before revenue recognition (`Ind AS 115`).\n"
+            "DISCRIMINATOR RULES (`WHOLE-COMPANY vs. DEAL TIER / SUB-SEGMENT REASONING`):\n"
             "- VALUE TYPE: Absolute Currency (value of new orders/contracts in the period — a flow, not a stock).\n"
             "- BASIS: Sector-specific (SaaS / industrial / services) — a forward indicator, not yet revenue.\n"
+            "- WHOLE-COMPANY AGGREGATE ONLY: You must strictly verify whether a reported figure represents the entire company's total aggregate order intake across all operations (`Bookings`) versus only a specific deal-size tier (`Large Deal TCV` — e.g. Wipro's $3.9 Billion large deal TCV on P. 9), a specific business segment (`Digital segment bookings`), or cumulative multi-year undelivered stock (`Order Book / Backlog`).\n"
+            "- SUB-SLICE REJECTION RULE: If a company reports only a headline figure for 'Large Deal TCV' or segment bookings, you must critically recognize that total company-wide aggregate bookings across all deal sizes are undisclosed. STRICTLY REJECT partial deal-tier sub-slices (`Large Deal TCV`) and return `null` when whole-company bookings are unavailable.\n"
             "- NEVER MAP TO THIS BUCKET: Order Backlog / Order Book (cumulative undelivered stock, not a period flow); Pre-sales (real-estate-specific, separate bucket); recognized Revenue; Collections (cash received)."
+        ),
+        "layer2_rules": (
+            "WHOLE-COMPANY BOOKINGS PRUNING: You MUST ONLY select total company-wide aggregate order intake or total gross booking value across all operations. STRICTLY REJECT any candidate that represents only a partial sub-slice of total bookings, such as 'Large Deal TCV / Large deals order intake' (e.g. Wipro P. 9) or segment-specific bookings, unless total company-wide bookings are completely undisclosed."
         ),
     },
     {
@@ -537,27 +757,49 @@ METRIC_METADATA: list[MetricDef] = [
     {
         "name": "Credit Cost ex one-off",
         "type": "Currency",
-        "accept": ["Credit Cost excluding one-offs", "Credit Cost ex one-off", "Normalized Credit Cost", "Underlying Credit Cost"],
-        "reject": ["Total Provisions", "Gross NPA Provisions", "Provisions (gross)", "Credit Cost %", "Credit Cost ratio", "PPOP"],
+        "accept": [
+            "Credit Cost excluding one-offs", "Credit Cost ex one-off", "Normalized Credit Cost", "Underlying Credit Cost", 
+            "Provisions (excluding exceptional)", "Core Credit Cost"
+        ],
+        "reject": [
+            "Total Provisions", "Gross NPA Provisions", "Provisions (gross)", "Credit Cost %", "Credit Cost ratio", 
+            "PPOP", "Provisions and Contingencies"
+        ],
         "definition": (
-            "The cost of credit (loan-loss provisions) excluding exceptional or non-recurring defaults.\n"
+            "The absolute currency cost of credit (loan-loss provisions) excluding exceptional, non-recurring defaults or macro-prudential one-time provisioning overlays. It reflects the normalized recurring credit risk of a lending portfolio.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (a cost / provision amount — NEVER a percentage / basis-points ratio).\n"
-            "- BASIS: Sector-specific (banking / NBFC) — the Adjusted/Normalized variant of credit cost.\n"
-            "- NEVER MAP TO THIS BUCKET: gross / total Provisions (NOT excluded of one-offs); the Credit Cost ratio / Credit Cost % (basis points or %); PPOP (→ separate banking aggregate)."
+            "- BASIS: Sector-specific (Banking / NBFC) — the Adjusted/Normalized variant of the absolute provision expense.\n"
+            "- NEVER MAP TO THIS BUCKET: Statutory Gross Provisions (`NOT excluded of one-offs`); the Credit Cost Ratio / Credit Cost % (`basis points or %, NOT currency`); PPOP."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP BANKING PROVISION VERIFICATION:\n"
+            "1. STEP 1 (🚨 CURRENCY VS. RATIO FIREWALL - CRITICAL): ACTIVATE KNOWLEDGE of Banking Disclosures (`e.g., HDFC Bank, Bajaj Finance`). Banks report 'Credit Cost' in TWO formats: absolute currency (`Rs. 5,000 Crores`) and a percentage ratio (`e.g., 'Credit Cost of 1.5% of advances'`). This bucket is STRICTLY for the absolute currency figure. If the candidate is a percentage (`%`) or basis points (`bps`), STRICTLY REJECT IT!\n"
+            "2. STEP 2 (NORMALIZATION PROOF): The candidate MUST explicitly state 'excluding one-offs', 'normalized', or clearly deduct a specific exceptional provision (`e.g., 'COVID-19 contingency provision'`) from total provisions. Do NOT blindly grab the statutory 'Provisions and Contingencies' P&L line and claim it is ex-one-off!\n"
+            "3. STEP 3 (DIRECTIONALITY): This is an expense. Treat it as a positive absolute cost figure, but verify its label."
         ),
     },
     {
         "name": "EVA",
         "type": "Currency",
-        "accept": ["EVA", "Economic Value Added"],
-        "reject": ["NOPAT", "ROIC", "Economic Profit (without EVA equivalence)", "Residual Income", "MVA", "Market Value Added"],
+        "accept": [
+            "EVA", "Economic Value Added", "Economic Value Added (EVA)", "True Economic Profit"
+        ],
+        "reject": [
+            "NOPAT", "ROIC", "Economic Profit (without EVA equivalence)", "Residual Income", 
+            "MVA", "Market Value Added", "Capital Charge", "Cost of Capital", "Average Capital Employed"
+        ],
         "definition": (
-            "Economic Value Added: the residual wealth left after deducting the cost of capital from operating profit. Indicates true value creation.\n"
+            "Economic Value Added (`EVA`): A proprietary financial metric showing the residual wealth created by a company after deducting the total cost of capital (`equity and debt`) from its operating profit.\n"
             "DISCRIMINATOR RULES:\n"
             "- VALUE TYPE: Absolute Currency (positive when value is created, negative when destroyed).\n"
-            "- BASIS: The specific 'EVA' / 'Economic Value Added' label.\n"
-            "- NEVER MAP TO THIS BUCKET: NOPAT (an input to EVA, not EVA itself); ROIC (a ratio, not currency); generic 'Economic Profit' unless the document explicitly equates it to EVA; Residual Income (related but distinct framework); MVA / Market Value Added."
+            "- BASIS: The specific 'EVA' / 'Economic Value Added' label. Usually presented in a dedicated 'Value Added Statement' or Corporate Governance shareholder section.\n"
+            "- NEVER MAP TO THIS BUCKET: NOPAT (`the starting operating profit input`); Capital Charge (`the subtracted cost input`); MVA / Market Value Added (`a market-cap metric, not an operating metric`); ROIC (`a percentage return ratio`)."
+        ),
+        "layer2_rules": (
+            "MANDATORY STEP-BY-STEP ACCOUNTING & MATHEMATICAL VERIFICATION:\n"
+            "1. STEP 1 (🚨 RECONCILIATION TABLE INPUT TRAP - CRITICAL): ACTIVATE KNOWLEDGE of Corporate Governance Value Added Statements. EVA is calculated via a multi-row schedule: `NOPAT minus Capital Charge = EVA`. When evaluating candidates from an EVA table, you MUST NEVER grab the starting row (`NOPAT / Net Operating Profit After Tax`) or the middle deduction row (`Capital Charge / Cost of Capital`). You MUST explicitly select the final calculated ending row labeled 'Economic Value Added'!\n"
+            "2. STEP 2 (MVA DISTRACTOR EXCLUSION): Companies often report MVA (`Market Value Added`) on the exact same page or next page as EVA. MVA is calculated as Market Capitalization minus Equity. STRICTLY REJECT MVA! Ensure the label explicitly says 'Economic Value Added' or 'EVA'."
         ),
     },
     {
