@@ -81,11 +81,21 @@ def _is_vertexai() -> bool:
 
 
 def _build_client_kwargs() -> dict:
-    key = _resolve_api_key()
-    kwargs = {"api_key": key}
     if _is_vertexai():
-        kwargs["vertexai"] = True
-    return kwargs
+        project = os.getenv("GOOGLE_CLOUD_PROJECT") or os.getenv("GCP_PROJECT")
+        location = os.getenv("GOOGLE_CLOUD_LOCATION") or os.getenv("GCP_LOCATION") or "us-central1"
+        key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        
+        # If project is provided, use Vertex AI ADC mode (project + location)
+        if project:
+            kwargs = {"vertexai": True, "project": project, "location": location}
+            return kwargs
+        # If only API key is provided, use Vertex AI Express mode
+        elif key:
+            return {"vertexai": True, "api_key": key.strip()}
+
+    key = _resolve_api_key()
+    return {"api_key": key}
 
 
 def make_async_client():
