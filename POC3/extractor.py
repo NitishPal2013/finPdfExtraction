@@ -577,6 +577,7 @@ async def run_extraction_company(
     model: str = DEFAULT_MODEL,
     concurrency: int = 4,
     force: bool = False,
+    out_suffix: str = "_POC3",
 ) -> list[dict]:
     """Run POC3 extraction over all annual report PDFs in a company directory."""
     company_dir = Path(company_dir).resolve()
@@ -646,7 +647,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.company_dir:
-        asyncio.run(run_extraction_company(args.company_dir, model=args.model, concurrency=args.concurrency, force=args.force))
+        asyncio.run(run_extraction_company(args.company_dir, model=args.model, concurrency=args.concurrency, force=args.force, out_suffix=args.out_suffix))
     elif args.pdf:
         if not args.company or not args.year:
             parser.error("--company and --year are required when using --pdf")
