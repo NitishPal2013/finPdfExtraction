@@ -68,6 +68,26 @@ def _resolve_api_key() -> str:
     )
 
 
+def _is_vertexai() -> bool:
+    v = (
+        os.getenv("VERTEXAI")
+        or os.getenv("USE_VERTEXAI")
+        or os.getenv("GEMINI_USE_VERTEXAI")
+        or os.getenv("GOOGLE_GENAI_USE_VERTEXAI")
+    )
+    if v and v.lower() in ("true", "1", "yes"):
+        return True
+    return False
+
+
+def _build_client_kwargs() -> dict:
+    key = _resolve_api_key()
+    kwargs = {"api_key": key}
+    if _is_vertexai():
+        kwargs["vertexai"] = True
+    return kwargs
+
+
 def make_async_client():
     """Fresh async Gemini client bound to the calling event loop.
 
@@ -75,11 +95,11 @@ def make_async_client():
     first use. Always invoke at the top of an async entry point — never
     cache the returned object across `asyncio.run()` invocations.
     """
-    return genai.Client(api_key=_resolve_api_key()).aio
+    return genai.Client(**_build_client_kwargs()).aio
 
 
 def make_sync_client():
     """Plain (sync) Gemini client. Use sparingly — handy for one-shot
     cache-create / cache-delete / file-delete bookkeeping where we don't
     want to drag asyncio plumbing into the call site."""
-    return genai.Client(api_key=_resolve_api_key())
+    return genai.Client(**_build_client_kwargs())
