@@ -44,24 +44,28 @@ logging.getLogger("google_genai.types").addFilter(_DropThoughtSignatureWarning()
 
 
 def _resolve_api_key() -> str:
-    load_dotenv()
-    key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    # 1. Prefer live environment variables first
+    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if key:
-        return key
+        return key.strip()
+    
+    # 2. Fall back to loading from .env file
+    load_dotenv(override=True)
+    key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if key:
+        return key.strip()
+        
     for parent in Path(__file__).resolve().parents:
         env_path = parent / ".env"
         if env_path.exists():
             for line in env_path.read_text().splitlines():
-                for var in ("GOOGLE_API_KEY", "GEMINI_API_KEY"):
+                for var in ("GEMINI_API_KEY", "GOOGLE_API_KEY"):
                     if line.strip().startswith(f"{var}="):
                         return line.split("=", 1)[1].strip()
     raise RuntimeError(
-        "Gemini API key not found. Set GOOGLE_API_KEY (or GEMINI_API_KEY) in the "
+        "Gemini API key not found. Set GEMINI_API_KEY (or GOOGLE_API_KEY) in the "
         "environment, or place a .env file containing one of those at the project root."
     )
-
-
-_API_KEY = _resolve_api_key()
 
 
 def make_async_client():
@@ -71,11 +75,11 @@ def make_async_client():
     first use. Always invoke at the top of an async entry point — never
     cache the returned object across `asyncio.run()` invocations.
     """
-    return genai.Client(api_key=_API_KEY).aio
+    return genai.Client(api_key=_resolve_api_key()).aio
 
 
 def make_sync_client():
     """Plain (sync) Gemini client. Use sparingly — handy for one-shot
     cache-create / cache-delete / file-delete bookkeeping where we don't
     want to drag asyncio plumbing into the call site."""
-    return genai.Client(api_key=_API_KEY)
+    return genai.Client(api_key=_resolve_api_key())
