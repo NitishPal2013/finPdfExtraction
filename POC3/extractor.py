@@ -357,20 +357,27 @@ async def run_extraction(
 
     try:
         t_up = time.time()
-        emit(f"[upload] sending {doc.pdf_path.name} to Gemini Files API…")
-        uploaded_file = sync_client.files.upload(file=str(doc.pdf_path))
-        emit(f"[upload] done in {time.time() - t_up:.1f}s — {uploaded_file.name}")
+        if getattr(sync_client._api_client, "vertexai", False):
+            emit(f"[prepare] loading {doc.pdf_path.name} in-memory for Vertex AI…")
+            pdf_bytes = doc.pdf_path.read_bytes()
+            pdf_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+            content_to_cache = [pdf_part]
+        else:
+            emit(f"[upload] sending {doc.pdf_path.name} to Gemini Files API…")
+            uploaded_file = sync_client.files.upload(file=str(doc.pdf_path))
+            emit(f"[upload] done in {time.time() - t_up:.1f}s — {uploaded_file.name}")
 
-        t_active = time.time()
-        uploaded_file = _wait_for_active(sync_client, uploaded_file)
-        emit(f"[upload] file ACTIVE in {time.time() - t_active:.1f}s")
+            t_active = time.time()
+            uploaded_file = _wait_for_active(sync_client, uploaded_file)
+            emit(f"[upload] file ACTIVE in {time.time() - t_active:.1f}s")
+            content_to_cache = [uploaded_file]
 
         t_cache = time.time()
         emit(f"[cache] creating ttl={cache_ttl_seconds}s …")
         cache = sync_client.caches.create(
             model=model,
             config=types.CreateCachedContentConfig(
-                contents=[uploaded_file],
+                contents=content_to_cache,
                 system_instruction=system_instruction,
                 ttl=f"{cache_ttl_seconds}s",
             ),
@@ -682,3 +689,4 @@ if __name__ == "__main__":
         print(f"JSON saved to {out_json}")
     else:
         parser.error("Either --pdf or --company-dir must be specified")
+
