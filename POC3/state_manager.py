@@ -52,16 +52,16 @@ class PipelineStateDB:
                 return matches[:limit]
             return matches
 
-    def update_status(self, local_path: str, new_status: str, gemini_file_name: str = None, error_message: str = None):
+    def update_status(self, local_path: str, new_status: str, **kwargs):
         with self.lock:
             data = self._read_db()
             for pdf in data["pdfs"]:
                 if pdf["local_path"] == str(local_path):
                     pdf["status"] = new_status
-                    if gemini_file_name is not None:
-                        pdf["gemini_file_name"] = gemini_file_name
-                    if error_message is not None:
-                        pdf["error_message"] = error_message
+                    if "gemini_file_name" in kwargs:
+                        pdf["gemini_file_name"] = kwargs["gemini_file_name"]
+                    if "error_message" in kwargs:
+                        pdf["error_message"] = kwargs["error_message"]
                     break
             self._write_db(data)
 
