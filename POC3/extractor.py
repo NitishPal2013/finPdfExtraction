@@ -641,6 +641,228 @@ async def run_extraction_company(
     return outcomes
 
 
+async def run_extraction_from_uri(
+    doc: DocPaths3,
+    gemini_file_name: str,
+    *,
+    model: str = DEFAULT_MODEL,
+    concurrency: int = 4,
+    cache_ttl_seconds: int = 7200,
+    progress_callback: Callable[[str], None] | None = None,
+) -> ExtractionResultPOC3:
+    """
+    Variant of run_extraction designed for the Decoupled Architecture.
+    Expects the file to already be uploaded (gemini_file_name).
+    DOES NOT upload the file, and DOES NOT delete the file in the finally block.
+    """
+    emit: Callable[[str], None] = progress_callback or print
+    async_client = make_async_client()
+    sync_client = make_sync_client()
+
+    system_instruction = build_system_instruction(doc.company_display, doc.fy_year)
+    cache = None
+    t_total = time.time()
+
+    emit("=" * 70)
+    emit(f"POC3 (Decoupled Consumer) — {model}")
+    emit(f"PDF:        {doc.pdf_path.name}")
+    emit(f"Company:    {doc.company_display}   |   FY: {doc.fy_year}")
+    emit(f"File URI:   {gemini_file_name}")
+    emit("=" * 70)
+
+    try:
+        emit(f"[prepare] retrieving pre-uploaded file {gemini_file_name}…")
+        uploaded_file = sync_client.files.get(name=gemini_file_name)
+        content_to_cache = [uploaded_file]
+
+        t_cache = time.time()
+        emit(f"[cache] creating ttl={cache_ttl_seconds}s …")
+        cache = sync_client.caches.create(
+            model=model,
+            config=types.CreateCachedContentConfig(
+                contents=content_to_cache,
+                system_instruction=system_instruction,
+                ttl=f"{cache_ttl_seconds}s",
+            ),
+        )
+        emit(f"[cache] ready in {time.time() - t_cache:.1f}s — {cache.name}")
+
+        semaphore = asyncio.Semaphore(concurrency)
+
+        # Layer 1: Candidate Harvesting
+        emit("\n--- LAYER 1: EXHAUSTIVE CANDIDATE HARVESTING ---")
+        l1_tasks = [
+            _harvest_one_metric(
+                metric=m, client=async_client, model=model,
+                cache_name=cache.name, semaphore=semaphore, emit=emit,
+            )
+            for m in METRIC_METADATA
+        ]
+        l1_results = await asyncio.gather(*l1_tasks)
+
+        harvested_candidates: dict[str, list[dict]] = {}
+        for res in l1_results:
+            harvested_candidates[res["metric"]] = res.get("candidates", [])
+
+        # Layer 2: LLM Finalization & Precision Selection (Dual-Scope)
+        emit("\n--- LAYER 2: LLM FINALIZATION & PRECISION SELECTION (DUAL-SCOPE) ---")
+        l2_tasks = []
+        for m in METRIC_METADATA:
+            mname = m["name"]
+            cands = harvested_candidates.get(mname, [])
+            cons_cands = [c for c in cands if c.get("entity_context") in ("Consolidated", "Unclear")]
+            std_cands = [c for c in cands if c.get("entity_context") in ("Standalone", "Unclear")]
+
+            if cons_cands:
+                l2_tasks.append(_finalize_one_metric(
+                    metric=m, candidates=cons_cands, client=async_client, model=model,
+                    cache_name=cache.name, semaphore=semaphore, emit=emit, target_scope="Consolidated"
+                ))
+            if std_cands:
+                l2_tasks.append(_finalize_one_metric(
+                    metric=m, candidates=std_cands, client=async_client, model=model,
+                    cache_name=cache.name, semaphore=semaphore, emit=emit, target_scope="Standalone"
+                ))
+
+        l2_results = await asyncio.gather(*l2_tasks) if l2_tasks else []
+        l2_cons_map = {res["metric"]: res for res in l2_results if res.get("target_scope") == "Consolidated"}
+        l2_std_map = {res["metric"]: res for res in l2_results if res.get("target_scope") == "Standalone"}
+
+        finalized_cons: list[dict] = []
+        finalized_std: list[dict] = []
+        
+        for m in METRIC_METADATA:
+            mname = m["name"]
+            # Consolidated slot
+            if mname in l2_cons_map:
+                f_cons = l2_cons_map[mname].get("finalized", {})
+            else:
+                f_cons = FinalizedMetricPOC3(
+                    metric_target=mname, final_value=None, winning_candidate=None,
+                    rejection_audit_log=["[LAYER 1]: 0 Consolidated candidate mentions found across entire document. Bypassed Layer 2 finalization."]
+                ).model_dump()
+            finalized_cons.append(f_cons)
+
+            # Standalone slot
+            if mname in l2_std_map:
+                f_std = l2_std_map[mname].get("finalized", {})
+            else:
+                f_std = FinalizedMetricPOC3(
+                    metric_target=mname, final_value=None, winning_candidate=None,
+                    rejection_audit_log=["[LAYER 1]: 0 Standalone candidate mentions found across entire document. Bypassed Layer 2 finalization."]
+                ).model_dump()
+            finalized_std.append(f_std)
+
+        def _normalize_val(v):
+            if v is None:
+                return None
+            s = str(v).replace("%", "").replace(",", "").replace("₹", "").replace("Rs.", "").replace("Rs", "").strip().lower()
+            for word in ["crore", "crores", "cr", "lakh", "lakhs", "lac", "lacs", "million", "millions", "mn", "billion", "billions", "bn", "inr", "usd"]:
+                s = s.replace(word, "").strip()
+            try:
+                return float(s)
+            except ValueError:
+                return s
+
+        def _apply_post_processing_guards(metrics: list[dict], scope_name: str):
+            m_map = {m["metric_target"]: m for m in metrics}
+            
+            ebit_m = m_map.get("EBIT Margin")
+            ebitda_m = m_map.get("EBITDA Margin")
+            if ebit_m and ebitda_m:
+                val1 = ebit_m.get("final_value")
+                val2 = ebitda_m.get("final_value")
+                val1_clean = _normalize_val(val1)
+                val2_clean = _normalize_val(val2)
+                if val1_clean is not None and val2_clean is not None and val1_clean == val2_clean:
+                    ebitda_m["final_value"] = None
+                    ebitda_m["winning_candidate"] = None
+                    ebitda_m["rejection_audit_log"].append(
+                        f"[REJECTED via Deterministic EBIT/EBITDA Margin Guard]: EBITDA Margin cannot equal EBIT Margin (identical value '{val2}'). Rejected duplicate EBITDA Margin in favor of EBIT Margin."
+                    )
+            
+            ebitda = m_map.get("EBITDA")
+            adj_ebitda = m_map.get("Adjusted EBITDA")
+            if ebitda and adj_ebitda:
+                val_eb = ebitda.get("final_value")
+                val_adj = adj_ebitda.get("final_value")
+                val_eb_clean = _normalize_val(val_eb)
+                val_adj_clean = _normalize_val(val_adj)
+                if val_eb_clean is not None and val_adj_clean is not None and val_eb_clean == val_adj_clean:
+                    win_adj = adj_ebitda.get("winning_candidate") or {}
+                    verbatim = win_adj.get("verbatim_source_text", "").lower()
+                    adj_keywords = ["exceptional", "adjustment", "one-time", "pro-forma", "adjusted", "normalized", "extraordinary"]
+                    if not any(kw in verbatim for kw in adj_keywords):
+                        adj_ebitda["final_value"] = None
+                        adj_ebitda["winning_candidate"] = None
+                        adj_ebitda["rejection_audit_log"].append(
+                            f"[REJECTED via Deterministic Adjusted EBITDA Duplicate Firewall]: Adjusted EBITDA equals unadjusted EBITDA ('{val_adj}') but verbatim text contains no adjustment keywords. Rejected duplicate Adjusted EBITDA."
+                        )
+            
+            if scope_name == "Consolidated":
+                for m_target in ["Cash Loss", "Cash Loss Incurrence Status"]:
+                    m_item = m_map.get(m_target)
+                    if m_item and m_item.get("final_value") is not None:
+                        win = m_item.get("winning_candidate") or {}
+                        verbatim = win.get("verbatim_source_text", "").lower()
+                        ref_log = win.get("forensic_reasoning_log", "").lower()
+                        if any(kw in verbatim or kw in ref_log for kw in ["caro", "clause", "xvii"]):
+                            m_item["final_value"] = None
+                            m_item["winning_candidate"] = None
+                            m_item["rejection_audit_log"].append(
+                                f"[REJECTED via Deterministic CARO Firewall]: Standalone CARO Clause (xvii) details are not applicable to Consolidated Financial Statements."
+                            )
+
+        _apply_post_processing_guards(finalized_cons, "Consolidated")
+        _apply_post_processing_guards(finalized_std, "Standalone")
+
+        cons_coverage = {m["metric_target"]: (m.get("final_value") is not None) for m in finalized_cons}
+        std_coverage = {m["metric_target"]: (m.get("final_value") is not None) for m in finalized_std}
+
+        total_in = sum(r.get("usage", {}).get("input_tokens", 0) for r in l1_results + l2_results)
+        total_out = sum(r.get("usage", {}).get("output_tokens", 0) for r in l1_results + l2_results)
+        total_cached = sum(r.get("usage", {}).get("cached_tokens", 0) for r in l1_results + l2_results)
+
+        totals = {
+            "metrics_total": len(METRIC_METADATA),
+            "metrics_found_cons": sum(1 for v in cons_coverage.values() if v),
+            "metrics_found_std": sum(1 for v in std_coverage.values() if v),
+            "tokens_in": total_in,
+            "tokens_out": total_out,
+            "tokens_cached_hits": total_cached,
+            "elapsed_seconds": round(time.time() - t_total, 2),
+        }
+
+        emit("\n" + "=" * 70)
+        emit("POC3 CONSUMER COMPLETED")
+        emit(f"  Consolidated found: {totals['metrics_found_cons']}/{totals['metrics_total']}")
+        emit(f"  Standalone found:   {totals['metrics_found_std']}/{totals['metrics_total']}")
+        emit(f"  Tokens:             in={total_in:,} out={total_out:,} cached={total_cached:,}")
+        emit(f"  Elapsed:            {totals['elapsed_seconds']}s")
+        emit("=" * 70)
+
+        return ExtractionResultPOC3(
+            company_display=doc.company_display,
+            fy_year=doc.fy_year,
+            model=model,
+            finalized_consolidated_metrics=finalized_cons,
+            finalized_standalone_metrics=finalized_std,
+            harvested_candidates=harvested_candidates,
+            consolidated_coverage=cons_coverage,
+            standalone_coverage=std_coverage,
+            totals=totals,
+        )
+
+    finally:
+        # ONLY delete the cache! The Janitor service owns the uploaded file lifecycle.
+        if cache is not None:
+            try:
+                sync_client.caches.delete(name=cache.name)
+                emit(f"[cleanup] cache deleted: {cache.name}")
+            except Exception as e:
+                emit(f"[cleanup] cache delete failed: {e!r}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run POC3 Two-Stage Extractor on a PDF or Directory.")
     parser.add_argument("--pdf", required=False, help="Path to PDF file")
