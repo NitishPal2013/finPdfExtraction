@@ -158,6 +158,8 @@ async def janitor_service(db: PipelineStateDB):
                         print(f"[Janitor] Cleaned up {Path(p['local_path']).name}")
                     except Exception as e:
                         print(f"[Janitor] Failed to delete {gemini_name}: {e}")
+                        # If delete fails (e.g., 429 quota), revert to original status so it can be retried later
+                        db.update_status(p["local_path"], p["status"])
                         
                 asyncio.create_task(delete_task(pdf))
 
