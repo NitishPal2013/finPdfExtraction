@@ -75,6 +75,7 @@ async def upload_service(db: PipelineStateDB):
 
 async def extraction_worker(worker_id: int, db: PipelineStateDB, model: str, concurrency: int, out_suffix: str, force: bool):
     """Consumer: Processes ACTIVE_BUFFER files."""
+    loop = asyncio.get_running_loop()
     while True:
         # Get one active file
         active_files = db.get_pdfs_by_status("ACTIVE_BUFFER", limit=1)
@@ -98,11 +99,16 @@ async def extraction_worker(worker_id: int, db: PipelineStateDB, model: str, con
 
         if out_xlsx.exists() and not force:
             print(f"[Worker-{worker_id}] Skipping {pdf_path.name} (already exists).")
-            db.update_status(local_path, "PROCESSED_AWAITING_CLEANUP")
+            try:
+                await loop.run_in_executor(None, _delete_file_sync, gemini_name)
+            except Exception as e:
+                print(f"[Worker-{worker_id}] Failed to delete skipped file {gemini_name}: {e}")
+            db.update_status(local_path, "COMPLETED", gemini_file_name=None)
             continue
 
         print(f"[Worker-{worker_id}] Starting extraction on {pdf_path.name}...")
         t0 = time.time()
+        final_status = "COMPLETED"
         try:
             doc_paths = derive_paths(pdf_path, company_name=pdf["company"], fy_override=pdf["fy"])
             result = await run_extraction_from_uri(
@@ -127,47 +133,21 @@ async def extraction_worker(worker_id: int, db: PipelineStateDB, model: str, con
                 }, f, indent=2)
                 
             print(f"[Worker-{worker_id}] Finished {pdf_path.name} in {time.time() - t0:.1f}s")
-            db.update_status(local_path, "PROCESSED_AWAITING_CLEANUP")
             
         except Exception as e:
             print(f"[Worker-{worker_id}] ERROR extracting {pdf_path.name}: {e}")
+            final_status = "ERROR"
             db.update_status(local_path, "ERROR", error_message=str(e))
-
-async def janitor_service(db: PipelineStateDB):
-    """Cleanup: Deletes files for PROCESSED or ERROR states."""
-    loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        while True:
-            cleanup_candidates = db.get_pdfs_by_status("PROCESSED_AWAITING_CLEANUP")
-            # Also cleanup errors that have a file uploaded
-            error_candidates = [p for p in db.get_pdfs_by_status("ERROR") if p.get("gemini_file_name")]
             
-            targets = cleanup_candidates + error_candidates
+        finally:
+            try:
+                print(f"[Worker-{worker_id}] Cleaning up file {gemini_name}...")
+                await loop.run_in_executor(None, _delete_file_sync, gemini_name)
+            except Exception as e:
+                print(f"[Worker-{worker_id}] Failed to delete {gemini_name}: {e}")
             
-            for pdf in targets:
-                # To prevent double deletion attempt, set to DELETING
-                db.update_status(pdf["local_path"], "DELETING")
-                
-                async def delete_task(p):
-                    gemini_name = p["gemini_file_name"]
-                    try:
-                        print(f"[Janitor] Deleting {gemini_name} for {Path(p['local_path']).name}...")
-                        await loop.run_in_executor(pool, _delete_file_sync, gemini_name)
-                        final_status = "COMPLETED" if p["status"] != "ERROR" else "ERROR"
-                        db.update_status(p["local_path"], final_status, gemini_file_name=None)
-                        print(f"[Janitor] Cleaned up {Path(p['local_path']).name}")
-                    except Exception as e:
-                        print(f"[Janitor] Failed to delete {gemini_name}: {e}")
-                        # If delete fails (e.g., 429 quota), revert to original status so it can be retried later
-                        db.update_status(p["local_path"], p["status"])
-                        
-                asyncio.create_task(delete_task(pdf))
-
-            counts = db.get_status_counts()
-            active_states = ["PENDING", "UPLOADING", "ACTIVE_BUFFER", "PROCESSING", "PROCESSED_AWAITING_CLEANUP", "DELETING"]
-            if all(counts.get(st, 0) == 0 for st in active_states):
-                break
-            await asyncio.sleep(5)
+            # Update final status and clear the gemini file name
+            db.update_status(local_path, final_status, gemini_file_name=None)
 
 
 async def main():
@@ -204,7 +184,6 @@ async def main():
     
     # Spawn background services
     upload_task = asyncio.create_task(upload_service(db))
-    janitor_task = asyncio.create_task(janitor_service(db))
     
     # Spawn extraction workers
     worker_tasks = []
@@ -216,7 +195,6 @@ async def main():
     # Wait for everyone to finish
     await upload_task
     await asyncio.gather(*worker_tasks)
-    await janitor_task
     
     print("\n=== Pipeline Complete ===")
     counts = db.get_status_counts()
