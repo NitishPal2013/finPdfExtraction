@@ -194,14 +194,14 @@ async def _call_with_retry(
     while True:
         attempt += 1
         t0 = time.time()
-        emit(f"[{label}] starting LLM call (attempt {attempt}) at {time.strftime('%X')}")
+        # emit(f"[{label}] starting LLM call (attempt {attempt}) at {time.strftime('%X')}")
         try:
             response = await client.models.generate_content(
                 model=model, contents=contents, config=config,
             )
             raw_text = getattr(response, "text", None) or ""
             parsed, usage = parse_fn(response)
-            emit(f"[{label}] finished LLM call (attempt {attempt}) successfully in {time.time() - t0:.1f}s")
+            # emit(f"[{label}] finished LLM call (attempt {attempt}) successfully in {time.time() - t0:.1f}s")
             return parsed, usage, attempt, raw_text
         except Exception as e:
             elapsed = time.time() - t0
@@ -237,7 +237,7 @@ async def _harvest_one_metric(
 
     async with semaphore:
         t_acq = time.time()
-        emit(f"[{label}] semaphore acquired at {time.strftime('%X')}, starting execution")
+        # emit(f"[{label}] semaphore acquired at {time.strftime('%X')}, starting execution")
         try:
             candidates, usage, attempts, _ = await _call_with_retry(
                 label=label, client=client, model=model,
@@ -248,7 +248,7 @@ async def _harvest_one_metric(
             return {"metric": metric["name"], "status": "error", "candidates": [], "usage": {}}
 
     elapsed = time.time() - t_acq
-    emit(f"[{label}] Harvested {len(candidates)} candidate(s) in {elapsed:.1f}s total (semaphore-owned)")
+    # emit(f"[{label}] Harvested {len(candidates)} candidate(s) in {elapsed:.1f}s total (semaphore-owned)")
     return {
         "metric": metric["name"], "status": "ok",
         "candidates": candidates, "usage": usage, "elapsed_s": round(elapsed, 2)
@@ -268,7 +268,7 @@ async def _finalize_one_metric(
 ) -> dict:
     label = f"L2[{target_scope[:4]}][{metric['name'][:18]}]"
     if not candidates:
-        emit(f"[{label}] No candidates to finalize — skipping L2 API call")
+        # emit(f"[{label}] No candidates to finalize — skipping L2 API call")
         default_res = FinalizedMetricPOC3(
             metric_target=metric["name"],
             final_value=None,
@@ -288,7 +288,7 @@ async def _finalize_one_metric(
 
     async with semaphore:
         t_acq = time.time()
-        emit(f"[{label}] semaphore acquired at {time.strftime('%X')}, starting execution")
+        # emit(f"[{label}] semaphore acquired at {time.strftime('%X')}, starting execution")
         try:
             finalized, usage, attempts, _ = await _call_with_retry(
                 label=label, client=client, model=model,
@@ -323,7 +323,7 @@ async def _finalize_one_metric(
                 )
                 val = None
 
-    emit(f"[{label}] Finalized: {'FOUND (' + str(val) + ')' if val is not None else 'REJECTED ALL'} in {elapsed:.1f}s")
+    # emit(f"[{label}] Finalized: {'FOUND (' + str(val) + ')' if val is not None else 'REJECTED ALL'} in {elapsed:.1f}s")
     return {
         "metric": metric["name"], "status": "ok",
         "finalized": finalized, "usage": usage, "elapsed_s": round(elapsed, 2),
