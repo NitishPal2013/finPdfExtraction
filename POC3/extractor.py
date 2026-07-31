@@ -40,6 +40,8 @@ from POC3.prompt import (
     build_finalization_prompt,
     build_system_instruction,
 )
+from POC3.preprocessor import preprocess_if_needed
+from POC3.live_tracker import tracker
 
 DEFAULT_MODEL = "gemini-3.1-flash-lite"
 BASE_DELAY = 2.0
@@ -221,19 +223,34 @@ async def _harvest_one_metric(
     metric: MetricDef,
     client,
     model: str,
-    cache_name: str,
+    cache_name: str | None,
     semaphore: asyncio.Semaphore,
     emit: Callable[[str], None],
+    fallback_contents: list | None = None,
+    system_instruction: str | None = None,
 ) -> dict:
     label = f"L1[{metric['name'][:20]}]"
     prompt = build_candidate_extraction_prompt(metric)
-    config = types.GenerateContentConfig(
-        cached_content=cache_name,
-        response_mime_type="application/json",
-        response_schema=CandidateListResponse.model_json_schema(),
-        temperature=0.0,
-        seed=42,
-    )
+    
+    if cache_name:
+        config = types.GenerateContentConfig(
+            cached_content=cache_name,
+            response_mime_type="application/json",
+            response_schema=CandidateListResponse.model_json_schema(),
+            temperature=0.0,
+            seed=42,
+        )
+        contents_payload = prompt
+    else:
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            response_mime_type="application/json",
+            response_schema=CandidateListResponse.model_json_schema(),
+            temperature=0.0,
+            seed=42,
+        )
+        contents_payload = (fallback_contents or []) + [prompt]
+
 
     async with semaphore:
         t_acq = time.time()
@@ -241,7 +258,7 @@ async def _harvest_one_metric(
         try:
             candidates, usage, attempts, _ = await _call_with_retry(
                 label=label, client=client, model=model,
-                contents=prompt, config=config, parse_fn=_parse_candidate_response,
+                contents=contents_payload, config=config, parse_fn=_parse_candidate_response,
                 emit=emit,
             )
         except NonRetryablePOC3Failure:
@@ -261,10 +278,12 @@ async def _finalize_one_metric(
     candidates: list[dict],
     client,
     model: str,
-    cache_name: str,
+    cache_name: str | None,
     semaphore: asyncio.Semaphore,
     emit: Callable[[str], None],
     target_scope: str = "Consolidated",
+    fallback_contents: list | None = None,
+    system_instruction: str | None = None,
 ) -> dict:
     label = f"L2[{target_scope[:4]}][{metric['name'][:18]}]"
     if not candidates:
@@ -278,13 +297,26 @@ async def _finalize_one_metric(
         return {"metric": metric["name"], "status": "ok", "finalized": default_res, "usage": {}, "target_scope": target_scope}
 
     prompt = build_finalization_prompt(metric, candidates, target_scope=target_scope)
-    config = types.GenerateContentConfig(
-        cached_content=cache_name,
-        response_mime_type="application/json",
-        response_schema=FinalizedMetricPOC3.model_json_schema(),
-        temperature=0.0,
-        seed=42,
-    )
+    
+    if cache_name:
+        config = types.GenerateContentConfig(
+            cached_content=cache_name,
+            response_mime_type="application/json",
+            response_schema=FinalizedMetricPOC3.model_json_schema(),
+            temperature=0.0,
+            seed=42,
+        )
+        contents_payload = prompt
+    else:
+        config = types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            response_mime_type="application/json",
+            response_schema=FinalizedMetricPOC3.model_json_schema(),
+            temperature=0.0,
+            seed=42,
+        )
+        contents_payload = (fallback_contents or []) + [prompt]
+
 
     async with semaphore:
         t_acq = time.time()
@@ -292,7 +324,7 @@ async def _finalize_one_metric(
         try:
             finalized, usage, attempts, _ = await _call_with_retry(
                 label=label, client=client, model=model,
-                contents=prompt, config=config, parse_fn=_parse_finalized_response,
+                contents=contents_payload, config=config, parse_fn=_parse_finalized_response,
                 emit=emit,
             )
         except NonRetryablePOC3Failure:
@@ -357,51 +389,80 @@ async def run_extraction(
 
     try:
         t_up = time.time()
-        if getattr(sync_client._api_client, "vertexai", False):
-            emit(f"[prepare] loading {doc.pdf_path.name} in-memory for Vertex AI…")
-            pdf_bytes = doc.pdf_path.read_bytes()
-            pdf_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
-            content_to_cache = [pdf_part]
-        else:
-            emit(f"[upload] sending {doc.pdf_path.name} to Gemini Files API…")
-            uploaded_file = sync_client.files.upload(file=str(doc.pdf_path))
-            emit(f"[upload] done in {time.time() - t_up:.1f}s — {uploaded_file.name}")
-
-            t_active = time.time()
-            uploaded_file = _wait_for_active(sync_client, uploaded_file)
-            emit(f"[upload] file ACTIVE in {time.time() - t_active:.1f}s")
-            content_to_cache = [uploaded_file]
-
-        t_cache = time.time()
-        emit(f"[cache] creating ttl={cache_ttl_seconds}s …")
-        cache = sync_client.caches.create(
-            model=model,
-            config=types.CreateCachedContentConfig(
-                contents=content_to_cache,
-                system_instruction=system_instruction,
-                ttl=f"{cache_ttl_seconds}s",
-            ),
-        )
-        emit(f"[cache] ready in {time.time() - t_cache:.1f}s — {cache.name}")
-
+        tracker.update(doc.pdf_path, "PREPROCESSING", "Checking compression thresholds...")
+        # Compress PDF if it exceeds size limits
+        actual_pdf_paths = preprocess_if_needed(doc.pdf_path, size_threshold_mb=30.0)
+        if isinstance(actual_pdf_paths, str):
+            actual_pdf_paths = [actual_pdf_paths]
+            
         semaphore = asyncio.Semaphore(concurrency)
+        harvested_candidates: dict[str, list[dict]] = {m["name"]: [] for m in METRIC_METADATA}
+        
+        uploaded_files = []
+        caches = []
 
-        # Layer 1: Candidate Harvesting
-        emit("\n--- LAYER 1: EXHAUSTIVE CANDIDATE HARVESTING ---")
-        l1_tasks = [
-            _harvest_one_metric(
-                metric=m, client=async_client, model=model,
-                cache_name=cache.name, semaphore=semaphore, emit=emit,
-            )
-            for m in METRIC_METADATA
-        ]
-        l1_results = await asyncio.gather(*l1_tasks)
+        for chunk_idx, path_str in enumerate(actual_pdf_paths):
+            actual_pdf_path = Path(path_str)
+            chunk_label = f" (Chunk {chunk_idx+1}/{len(actual_pdf_paths)})" if len(actual_pdf_paths) > 1 else ""
+            
+            if getattr(sync_client._api_client, "vertexai", False):
+                emit(f"[prepare] loading {actual_pdf_path.name} in-memory for Vertex AI…")
+                pdf_bytes = actual_pdf_path.read_bytes()
+                pdf_part = types.Part.from_bytes(data=pdf_bytes, mime_type="application/pdf")
+                content_to_cache = [pdf_part]
+            else:
+                tracker.update(doc.pdf_path, "UPLOADING", f"Chunk {chunk_idx+1}/{len(actual_pdf_paths)}")
+                emit(f"[upload] sending {actual_pdf_path.name} to Gemini Files API…")
+                uploaded_file = sync_client.files.upload(file=str(actual_pdf_path))
+                uploaded_files.append(uploaded_file)
+                emit(f"[upload] done in {time.time() - t_up:.1f}s — {uploaded_file.name}")
 
-        harvested_candidates: dict[str, list[dict]] = {}
-        for res in l1_results:
-            harvested_candidates[res["metric"]] = res.get("candidates", [])
+                t_active = time.time()
+                uploaded_file = _wait_for_active(sync_client, uploaded_file)
+                emit(f"[upload] file ACTIVE in {time.time() - t_active:.1f}s")
+                content_to_cache = [uploaded_file]
+
+            t_cache = time.time()
+            emit(f"[cache] creating ttl={cache_ttl_seconds}s{chunk_label} …")
+            cache_name = None
+            
+            try:
+                cache = sync_client.caches.create(
+                    model=model,
+                    config=types.CreateCachedContentConfig(
+                        contents=content_to_cache,
+                        system_instruction=system_instruction,
+                        ttl=f"{cache_ttl_seconds}s",
+                    ),
+                )
+                caches.append(cache)
+                cache_name = cache.name
+                emit(f"[cache] ready in {time.time() - t_cache:.1f}s — {cache_name}")
+            except Exception as e:
+                err_msg = str(e)
+                if "400" in err_msg and "INVALID_ARGUMENT" in err_msg:
+                    emit(f"[WARNING] File rejected by Gemini API Context Cache (likely exceeds Token/Size limits). Using fallback direct content mode. Error: {err_msg[:100]}...")
+                else:
+                    raise
+
+            # Layer 1: Candidate Harvesting for this chunk
+            tracker.update(doc.pdf_path, "HARVESTING", f"Layer 1 on Chunk {chunk_idx+1}/{len(actual_pdf_paths)} (37 metrics)")
+            emit(f"\n--- LAYER 1: EXHAUSTIVE CANDIDATE HARVESTING{chunk_label} ---")
+            l1_tasks = [
+                _harvest_one_metric(
+                    metric=m, client=async_client, model=model,
+                    cache_name=cache_name, semaphore=semaphore, emit=emit,
+                    fallback_contents=content_to_cache, system_instruction=system_instruction
+                )
+                for m in METRIC_METADATA
+            ]
+            l1_results = await asyncio.gather(*l1_tasks)
+
+            for res in l1_results:
+                harvested_candidates[res["metric"]].extend(res.get("candidates", []))
 
         # Layer 2: LLM Finalization & Precision Selection (Dual-Scope: Consolidated & Standalone)
+        tracker.update(doc.pdf_path, "FINALIZING", "Layer 2 Finalization")
         emit("\n--- LAYER 2: LLM FINALIZATION & PRECISION SELECTION (DUAL-SCOPE) ---")
         l2_tasks = []
         for m in METRIC_METADATA:
@@ -413,12 +474,14 @@ async def run_extraction(
             if cons_cands:
                 l2_tasks.append(_finalize_one_metric(
                     metric=m, candidates=cons_cands, client=async_client, model=model,
-                    cache_name=cache.name, semaphore=semaphore, emit=emit, target_scope="Consolidated"
+                    cache_name=None, semaphore=semaphore, emit=emit, target_scope="Consolidated",
+                    fallback_contents=None, system_instruction=system_instruction
                 ))
             if std_cands:
                 l2_tasks.append(_finalize_one_metric(
                     metric=m, candidates=std_cands, client=async_client, model=model,
-                    cache_name=cache.name, semaphore=semaphore, emit=emit, target_scope="Standalone"
+                    cache_name=None, semaphore=semaphore, emit=emit, target_scope="Standalone",
+                    fallback_contents=None, system_instruction=system_instruction
                 ))
 
         l2_results = await asyncio.gather(*l2_tasks) if l2_tasks else []
@@ -564,18 +627,20 @@ async def run_extraction(
         )
 
     finally:
-        if cache is not None:
+        t_clean = time.time()
+        for c in caches:
             try:
-                sync_client.caches.delete(name=cache.name)
-                emit(f"[cleanup] cache deleted: {cache.name}")
+                sync_client.caches.delete(name=c.name)
+                emit(f"[cleanup] cache deleted: {c.name}")
             except Exception as e:
-                emit(f"[cleanup] cache delete failed: {e!r}")
-        if uploaded_file is not None:
+                emit(f"[cleanup-error] failed to delete cache {c.name}: {e}")
+        
+        for f in uploaded_files:
             try:
-                sync_client.files.delete(name=uploaded_file.name)
-                emit(f"[cleanup] uploaded file deleted: {uploaded_file.name}")
+                sync_client.files.delete(name=f.name)
+                emit(f"[cleanup] uploaded file deleted: {f.name}")
             except Exception as e:
-                emit(f"[cleanup] file delete failed: {e!r}")
+                emit(f"[cleanup-error] failed to delete file {f.name}: {e}")
 
 
 async def run_extraction_company(
@@ -594,6 +659,8 @@ async def run_extraction_company(
     company_name = company_dir.name
     pdfs = sorted([p for p in company_dir.glob("*.pdf") if not p.name.endswith("_audit_pages.pdf")])
     print(f"[{company_name}] Starting batch extraction for {len(pdfs)} PDF(s) in {company_dir}")
+    
+    tracker.set_batch(pdfs)
 
     outcomes = []
     for pdf in pdfs:
@@ -606,6 +673,7 @@ async def run_extraction_company(
 
         if out_xlsx.exists() and not force:
             print(f"[{company_name}] {pdf.name} -> already exists ({out_xlsx.name}), skipping.")
+            tracker.update(pdf, "DONE", "Skipped (Already exists)")
             outcomes.append({"pdf": pdf.name, "status": "skipped_exists"})
             continue
 
@@ -628,10 +696,29 @@ async def run_extraction_company(
                 }, f, indent=2)
 
             elapsed = round(time.time() - t0, 1)
+            found = result.totals.get("metrics_found", 0)
+            
+            # Auto-cleanup phase on success
+            try:
+                out_json.unlink(missing_ok=True)
+                for f in pdf.parent.glob(f"{pdf.stem}_gs_compressed*.pdf"):
+                    f.unlink(missing_ok=True)
+            except Exception as e:
+                print(f"[Cleanup] Error cleaning up {pdf.name}: {e}")
+
+            tracker.update(pdf, "DONE", f"Found {found}/37 in {elapsed}s")
+            
+            # Delete the status file itself so only .xlsx remains
+            try:
+                (pdf.parent / f"{pdf.name}.status").unlink(missing_ok=True)
+            except Exception:
+                pass
+
             print(f"[{company_name}] Finished {pdf.name} in {elapsed}s -> saved {out_xlsx.name}")
-            outcomes.append({"pdf": pdf.name, "status": "ok", "elapsed_s": elapsed, "found": result.totals.get("metrics_found", 0)})
+            outcomes.append({"pdf": pdf.name, "status": "ok", "elapsed_s": elapsed, "found": found})
         except Exception as e:
             elapsed = round(time.time() - t0, 1)
+            tracker.update(pdf, "ERROR", f"{type(e).__name__}: {str(e)[:50]}")
             print(f"[{company_name}] FAILED {pdf.name} after {elapsed}s: {type(e).__name__}: {e}")
             outcomes.append({"pdf": pdf.name, "status": "error", "error": str(e), "elapsed_s": elapsed})
 
@@ -677,15 +764,25 @@ async def run_extraction_from_uri(
 
         t_cache = time.time()
         emit(f"[cache] creating ttl={cache_ttl_seconds}s …")
-        cache = sync_client.caches.create(
-            model=model,
-            config=types.CreateCachedContentConfig(
-                contents=content_to_cache,
-                system_instruction=system_instruction,
-                ttl=f"{cache_ttl_seconds}s",
-            ),
-        )
-        emit(f"[cache] ready in {time.time() - t_cache:.1f}s — {cache.name}")
+        cache_name = None
+        
+        try:
+            cache = sync_client.caches.create(
+                model=model,
+                config=types.CreateCachedContentConfig(
+                    contents=content_to_cache,
+                    system_instruction=system_instruction,
+                    ttl=f"{cache_ttl_seconds}s",
+                ),
+            )
+            cache_name = cache.name
+            emit(f"[cache] ready in {time.time() - t_cache:.1f}s — {cache_name}")
+        except Exception as e:
+            err_msg = str(e)
+            if "400" in err_msg and "INVALID_ARGUMENT" in err_msg:
+                emit(f"[WARNING] File rejected by Gemini API Context Cache (likely exceeds Token/Size limits). Using fallback direct content mode. Error: {err_msg[:100]}...")
+            else:
+                raise
 
         semaphore = asyncio.Semaphore(concurrency)
 
@@ -694,7 +791,8 @@ async def run_extraction_from_uri(
         l1_tasks = [
             _harvest_one_metric(
                 metric=m, client=async_client, model=model,
-                cache_name=cache.name, semaphore=semaphore, emit=emit,
+                cache_name=cache_name, semaphore=semaphore, emit=emit,
+                fallback_contents=content_to_cache, system_instruction=system_instruction
             )
             for m in METRIC_METADATA
         ]
@@ -716,12 +814,14 @@ async def run_extraction_from_uri(
             if cons_cands:
                 l2_tasks.append(_finalize_one_metric(
                     metric=m, candidates=cons_cands, client=async_client, model=model,
-                    cache_name=cache.name, semaphore=semaphore, emit=emit, target_scope="Consolidated"
+                    cache_name=cache_name, semaphore=semaphore, emit=emit, target_scope="Consolidated",
+                    fallback_contents=content_to_cache, system_instruction=system_instruction
                 ))
             if std_cands:
                 l2_tasks.append(_finalize_one_metric(
                     metric=m, candidates=std_cands, client=async_client, model=model,
-                    cache_name=cache.name, semaphore=semaphore, emit=emit, target_scope="Standalone"
+                    cache_name=cache_name, semaphore=semaphore, emit=emit, target_scope="Standalone",
+                    fallback_contents=content_to_cache, system_instruction=system_instruction
                 ))
 
         l2_results = await asyncio.gather(*l2_tasks) if l2_tasks else []
